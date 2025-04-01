@@ -1,0 +1,39 @@
+:root {
+    --house-card-width: 7.063rem;
+    --house-card-height: 9.813rem;
+}
+
+.card {
+    height: var(--house-card-height);
+    width: var(--house-card-width);
+}
+
+.player-card, .player-card-back {
+    height: calc(var(--house-card-height)*4/5);
+    width: calc(var(--house-card-width)*4/5);
+    margin: 0 0.5rem;
+}
+
+@media (max-width: 1000px) {
+    .card {
+        height: calc(var(--house-card-height)*4/5);
+        width: calc(var(--house-card-width)*4/5);
+    }
+    
+    .player-card, .player-card-back {
+        height: calc(var(--house-card-height)*4/5);
+        width: calc(var(--house-card-width)*4/5);
+        margin: 0 0.5rem;
+    }
+
+    .house-cards {
+        position: relative;
+        width: fit-content;
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+  }

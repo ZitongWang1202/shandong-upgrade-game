@@ -1,0 +1,100 @@
+:root {
+    --card-width: 5rem;
+    --card-height: 7rem;
+    --card-overlap: 2rem;
+}
+
+.card {
+    height: var(--card-height);
+    width: var(--card-width);
+    transition: transform 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-10px);
+}
+
+.player-card {
+    height: var(--card-height);
+    width: var(--card-width);
+    object-fit: contain;
+    margin: 0 0.5rem;
+    cursor: pointer;
+}
+
+.player-card-back {
+    height: calc(var(--card-height)*4/5);
+    width: calc(var(--card-width)*4/5);
+    margin: 0 0.5rem;
+}
+
+.game-table {
+    background: #1a472a;
+    border-radius: 50px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.3);
+}
+
+.player-area {
+    padding: 1rem;
+    background: rgba(255,255,255,0.1);
+    border-radius: 10px;
+}
+
+.play-area {
+    background: rgba(255,255,255,0.05);
+    border-radius: 20px;
+    padding: 2rem;
+    margin: 1rem;
+}
+
+/* 玩家手牌区域的悬浮效果 */
+.player-hand {
+    display: flex;
+    margin-left: calc(var(--card-overlap) * -1);
+}
+
+.player-hand > * {
+    margin-left: calc(-1 * var(--card-overlap));
+}
+
+.player-hand > *:hover {
+    transform: translateY(-20px);
+    z-index: 1;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    .player-area {
+        padding: 0.5rem;
+    }
+
+    .play-area {
+        padding: 1rem;
+        margin: 0.5rem;
+    }
+}
+
+/* 响应式设计 */
+@media (max-width: 1000px) {
+    .card {
+        height: calc(var(--card-height)*3/4);
+        width: calc(var(--card-width)*3/4);
+    }
+    
+    .player-card, .player-card-back {
+        height: calc(var(--card-height)*3/5);
+        width: calc(var(--card-width)*3/5);
+        margin: 0 0.3rem;
+    }
+
+    .house-cards {
+        position: relative;
+        width: fit-content;
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+  }
