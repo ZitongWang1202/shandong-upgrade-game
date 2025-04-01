@@ -109,8 +109,24 @@ io.on('connection', (socket) => {
 
     // 加入房间
     socket.on('joinRoom', (roomId) => {
+        console.log(`Player ${socket.id} trying to join room ${roomId}`);
         const room = rooms.get(roomId);
-        if (room && room.players.length < 4) {
+        if (!room) {
+            console.log(`Room ${roomId} not found`);
+            socket.emit('joinRoomError', { error: 'Room not found' });
+            return;
+        }
+        
+        // 检查玩家是否已经在房间中
+        const existingPlayer = room.players.find(p => p.id === socket.id);
+        if (existingPlayer) {
+            console.log(`Player ${socket.id} already in room ${roomId}`);
+            socket.emit('joinRoomSuccess', roomId);
+            socket.emit('roomInfo', room);
+            return;
+        }
+        
+        if (room.players.length < 4) {
             room.players.push({
                 id: socket.id,
                 ready: false,
@@ -120,77 +136,122 @@ io.on('connection', (socket) => {
             socket.emit('joinRoomSuccess', roomId);
             io.to(roomId).emit('roomInfo', room);
             io.emit('roomList', Array.from(rooms.values()));
+            console.log(`Player ${socket.id} joined room ${roomId}`, room);
+        } else {
+            console.log(`Room ${roomId} is full`);
+            socket.emit('joinRoomError', { error: 'Room is full' });
         }
     });
 
     // 获取房间信息
     socket.on('getRoomInfo', (roomId) => {
+        console.log(`Getting room info for ${roomId}`);
         const room = rooms.get(roomId);
         if (room) {
             socket.emit('roomInfo', room);
+            console.log(`Sent room info for ${roomId}:`, room);
+        } else {
+            console.log(`Room ${roomId} not found for getRoomInfo`);
+            socket.emit('roomInfoError', { error: 'Room not found' });
         }
     });
 
     // 准备/取消准备
     socket.on('toggleReady', (roomId) => {
+        console.log(`Player ${socket.id} toggling ready state in room ${roomId}`);
         const room = rooms.get(roomId);
-        if (room) {
-            const player = room.players.find(p => p.id === socket.id);
-            if (player) {
-                player.ready = !player.ready;
-                
-                // 检查是否所有玩家都准备好
-                if (room.players.length === 4 && room.players.every(p => p.ready)) {
-                    console.log('All players ready, starting game');
-                    
-                    // 创建游戏状态
-                    const deck = shuffleDeck(createDeck());
-                    const gameState = {
-                        deck: deck,
-                        players: room.players.map(p => ({
-                            ...p,
-                            cards: [],
-                            isDealer: false
-                        })),
-                        currentTurn: null,
-                        mainSuit: null,
-                        mainCaller: null,
-                        mainCards: null,
-                        phase: 'dealing',
-                        currentRound: [],
-                        bottomCards: [],
-                        isMainFixed: false,
-                        mainCallDeadline: Date.now() + 100000, // 给100秒的叫主时间
-                        counterMainDeadline: null,
-                        mainCalled: false
-                    };
+        if (!room) {
+            console.log(`Room ${roomId} not found for toggle ready`);
+            socket.emit('toggleReadyError', { error: 'Room not found' });
+            return;
+        }
+        
+        const player = room.players.find(p => p.id === socket.id);
+        if (!player) {
+            console.log(`Player ${socket.id} not found in room ${roomId}`);
+            socket.emit('toggleReadyError', { error: 'Player not found in room' });
+            return;
+        }
+        
+        // 反转准备状态
+        player.ready = !player.ready;
+        console.log(`Player ${socket.id} ready state toggled to ${player.ready}`);
+        
+        // 立即发送更新后的房间信息给所有玩家
+        io.to(roomId).emit('roomInfo', room);
+        
+        // 检查是否所有玩家都准备好
+        if (room.players.length === 4 && room.players.every(p => p.ready)) {
+            console.log('All players ready, starting game');
+            
+            // 创建游戏状态
+            const deck = shuffleDeck(createDeck());
+            const gameState = {
+                deck: deck,
+                players: room.players.map(p => ({
+                    ...p,
+                    cards: [],
+                    isDealer: false
+                })),
+                currentTurn: null,
+                mainSuit: null,
+                mainCaller: null,
+                mainCards: null,
+                phase: 'dealing',
+                currentRound: [],
+                bottomCards: [],
+                isMainFixed: false,
+                mainCallDeadline: Date.now() + 100000, // 给100秒的叫主时间
+                counterMainDeadline: null,
+                mainCalled: false
+            };
 
-                    // 预先分配好牌
-                    for (let i = 0; i < 26; i++) {
-                        for (let j = 0; j < 4; j++) {
-                            const card = gameState.deck.pop();
-                            gameState.players[j].cards.push(card);
-                        }
-                    }
-
-                    // 保存底牌
-                    gameState.bottomCards = gameState.deck;
-                    console.log('Bottom cards:', gameState.bottomCards);
-                    
-                    // 存储游戏状态
-                    games.set(roomId, gameState);
-
-                    // 通知所有玩家游戏开始
-                    io.to(roomId).emit('gameStart');
-
-                    // 等待客户端发送ready信号后再开始发牌
-                    socket.once('clientReady', () => {
-                        console.log('Client ready, starting to deal cards');
-                        dealNextRound(gameState, roomId, 0);
-                    });
+            // 预先分配好牌
+            for (let i = 0; i < 26; i++) {
+                for (let j = 0; j < 4; j++) {
+                    const card = gameState.deck.pop();
+                    gameState.players[j].cards.push(card);
                 }
             }
+
+            // 保存底牌
+            gameState.bottomCards = gameState.deck;
+            console.log('Bottom cards:', gameState.bottomCards);
+            
+            // 存储游戏状态
+            games.set(roomId, gameState);
+
+            // 通知所有玩家游戏开始
+            io.to(roomId).emit('gameStart');
+            console.log('Sent gameStart event to all players in room', roomId);
         }
+    });
+
+    // 处理客户端准备好接收卡牌的信号
+    socket.on('clientReady', () => {
+        console.log(`Client ${socket.id} is ready to receive cards`);
+        
+        // 查找该玩家所在的房间
+        let playerRoomId = null;
+        rooms.forEach((room, roomId) => {
+            if (room.players.some(p => p.id === socket.id)) {
+                playerRoomId = roomId;
+            }
+        });
+        
+        if (!playerRoomId) {
+            console.log(`No room found for player ${socket.id}`);
+            return;
+        }
+        
+        const gameState = games.get(playerRoomId);
+        if (!gameState) {
+            console.log(`No game state found for room ${playerRoomId}`);
+            return;
+        }
+        
+        console.log(`Starting to deal cards for player ${socket.id} in room ${playerRoomId}`);
+        dealNextRound(gameState, playerRoomId, 0);
     });
 
     // 处理叫主

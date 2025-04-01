@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -8,55 +8,112 @@ import {
   HStack,
   Container,
   SimpleGrid,
+  useToast,
 } from '@chakra-ui/react';
 import socket from '../utils/socket';
 
 const RoomPage = () => {
   const { id: roomId } = useParams();
   const navigate = useNavigate();
+  const toast = useToast();
   const [players, setPlayers] = useState([]);
-  const [isReady, setIsReady] = useState(false);
+  const [myPlayer, setMyPlayer] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // 获取房间信息的函数
+  const getRoomInfo = useCallback(() => {
+    console.log('Getting room info for:', roomId);
+    socket.emit('getRoomInfo', roomId);
+  }, [roomId]);
   
   useEffect(() => {
-    // 获取房间信息
-    socket.emit('getRoomInfo', roomId);
+    console.log("RoomPage mounted, joining room:", roomId);
+    
+    // 加入房间
+    socket.emit('joinRoom', roomId);
     
     // 监听房间信息更新
     socket.on('roomInfo', (roomInfo) => {
-      console.log('Room info updated:', roomInfo);
-      setPlayers(roomInfo.players);
+      console.log('Room info received:', roomInfo);
+      if (roomInfo && roomInfo.players) {
+        // 更新玩家列表
+        setPlayers(roomInfo.players);
+        
+        // 找到自己的玩家信息
+        const me = roomInfo.players.find(p => p.id === socket.id);
+        if (me) {
+          setMyPlayer(me);
+          console.log('Found my player info:', me);
+        } else {
+          console.log('Could not find my player info in room data');
+        }
+      }
     });
 
     // 监听游戏开始
     socket.on('gameStart', () => {
-      console.log('Received gameStart event, preparing to navigate');
-      // 使用 replace 而不是 push，避免历史记录堆栈
+      console.log('Game starting, navigating to game page');
       navigate('/game', { replace: true });
     });
-
-    // 在加入房间成功后保存 roomId
-    socket.on('joinRoomSuccess', (roomId) => {
-      console.log('Successfully joined room:', roomId);
-      localStorage.setItem('roomId', roomId);
+    
+    // 监听加入房间成功
+    socket.on('joinRoomSuccess', (joinedRoomId) => {
+      console.log('Successfully joined room:', joinedRoomId);
+      localStorage.setItem('roomId', joinedRoomId);
+      // 获取最新的房间信息
+      getRoomInfo();
     });
+    
+    // 监听错误
+    socket.on('joinRoomError', (error) => {
+      console.error('Failed to join room:', error);
+      toast({
+        title: '加入房间失败',
+        description: error.error,
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    });
+
+    // 初始获取房间信息
+    getRoomInfo();
 
     // 清理函数
     return () => {
+      console.log('RoomPage unmounting, leaving room:', roomId);
       socket.off('roomInfo');
       socket.off('gameStart');
+      socket.off('joinRoomSuccess');
+      socket.off('joinRoomError');
     };
-  }, [roomId, navigate]);
+  }, [roomId, navigate, getRoomInfo, toast]);
 
   const toggleReady = () => {
-    console.log('Toggling ready state');
-    setIsReady(!isReady);
+    if (isLoading) return; // 防止重复点击
+    
+    setIsLoading(true);
+    console.log('Toggling ready state for room:', roomId);
+    
     socket.emit('toggleReady', roomId);
+    
+    // 1秒后自动解除加载状态，以防服务器没有响应
+    setTimeout(() => {
+      setIsLoading(false);
+    }, 1000);
   };
 
   const leaveRoom = () => {
+    console.log('Leaving room:', roomId);
     socket.emit('leaveRoom', roomId);
     navigate('/lobby');
   };
+
+  // 填充空位置直到4个玩家
+  const filledPlayers = [...players];
+  while (filledPlayers.length < 4) {
+    filledPlayers.push({ id: `empty-${filledPlayers.length}`, name: '等待加入...' });
+  }
 
   return (
     <Container maxW="container.xl" py={8}>
@@ -69,18 +126,22 @@ const RoomPage = () => {
         </HStack>
 
         <SimpleGrid columns={2} spacing={4}>
-          {players.map((player, index) => (
+          {filledPlayers.map((player) => (
             <Box
-              key={index}
+              key={player.id}
               p={4}
               border="1px"
               borderColor="gray.200"
               borderRadius="md"
+              bg={player.id === socket.id ? 'blue.50' : 'white'}
             >
               <HStack justify="space-between">
-                <Text>玩家 {player.name}</Text>
+                <Text>
+                  {player.name} 
+                  {player.id === socket.id ? '(我)' : ''}
+                </Text>
                 <Text color={player.ready ? 'green.500' : 'red.500'}>
-                  {player.ready ? '已准备' : '未准备'}
+                  {player.id.startsWith('empty-') ? '' : (player.ready ? '已准备' : '未准备')}
                 </Text>
               </HStack>
             </Box>
@@ -88,10 +149,14 @@ const RoomPage = () => {
         </SimpleGrid>
 
         <Button
-          colorScheme={isReady ? 'red' : 'green'}
+          colorScheme={myPlayer?.ready ? 'red' : 'green'}
           onClick={toggleReady}
+          size="lg"
+          isLoading={isLoading}
+          loadingText="处理中..."
+          isDisabled={!myPlayer}
         >
-          {isReady ? '取消准备' : '准备'}
+          {myPlayer?.ready ? '取消准备' : '准备'}
         </Button>
       </VStack>
     </Container>
