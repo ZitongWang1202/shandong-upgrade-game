@@ -45,12 +45,27 @@ function shuffleDeck(deck) {
 // 一轮发牌的函数（每人同时收到一张牌）
 function dealNextRound(gameState, roomId, currentRound = 0) {
     const totalRounds = 26;
-    console.log(`Dealing round ${currentRound + 1}/${totalRounds}`);
+    console.log(`Dealing round ${currentRound + 1}/${totalRounds} for room ${roomId}`);
     
+    // 第一张牌时，设置初始状态
+    if (currentRound === 0) {
+        console.log('First card dealt, can start calling main');
+        gameState.preGameState = {
+            isDealing: true,
+            canCallMain: true
+        };
+        io.to(roomId).emit('updateGameState', {
+            phase: 'pregame',
+            preGameState: gameState.preGameState
+        });
+    }
+
     if (currentRound >= totalRounds) {
         console.log('All cards dealt');
+        gameState.preGameState.isDealing = false;
         io.to(roomId).emit('updateGameState', {
-            phase: 'callMain'
+            phase: 'pregame',
+            preGameState: gameState.preGameState
         });
         return;
     }
@@ -58,7 +73,7 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
     // 给每个玩家发一张牌
     gameState.players.forEach((player, index) => {
         const card = player.cards[currentRound];
-        console.log(`Sending card to player ${player.name}:`, card);
+        console.log(`Sending card to player ${player.name}(${player.id}):`, card);
         
         io.to(player.id).emit('receiveCard', {
             card,
@@ -67,16 +82,16 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
         });
     });
 
-    // 广播发牌进度
+    // 广播发牌进度和游戏状态
     io.to(roomId).emit('dealingProgress', {
         currentRound: currentRound + 1,
         totalRounds
     });
 
-    // 延长每轮发牌的间隔
+    // 继续下一轮发牌 间隔2秒
     setTimeout(() => {
         dealNextRound(gameState, roomId, currentRound + 1);
-    }, 2000);  // 增加到2000ms
+    }, 2000);
 }
 
 io.on('connection', (socket) => {
@@ -173,7 +188,7 @@ io.on('connection', (socket) => {
             return;
         }
         
-        // 反转准备状态
+        // 取消准备状态
         player.ready = !player.ready;
         console.log(`Player ${socket.id} ready state toggled to ${player.ready}`);
         
@@ -197,7 +212,11 @@ io.on('connection', (socket) => {
                 mainSuit: null,
                 mainCaller: null,
                 mainCards: null,
-                phase: 'dealing',
+                phase: 'pregame',           // 游戏阶段
+                preGameState: {            // pregame 阶段的子状态
+                    isDealing: true,       // 是否在发牌
+                    canCallMain: true      // 是否可以叫主
+                },
                 currentRound: [],
                 bottomCards: [],
                 isMainFixed: false,
@@ -258,17 +277,8 @@ io.on('connection', (socket) => {
     socket.on('callMain', ({ roomId, mainSuit, mainCards }) => {
         console.log('Received callMain:', { roomId, mainSuit, mainCards });
         
-        if (!roomId) {
-            console.error('No roomId provided');
-            socket.emit('callMainError', { error: 'No roomId provided' });
-            return;
-        }
-        
         const gameState = games.get(roomId);
-        console.log('Found gameState:', !!gameState, 'for roomId:', roomId);
-        console.log('All available games:', Array.from(games.keys()));
-        
-        if (gameState && !gameState.mainCalled) {
+        if (gameState && gameState.preGameState.canCallMain && !gameState.mainCalled) {
             console.log('Setting main:', { mainSuit, mainCards });
             
             // 更新游戏状态
@@ -276,30 +286,45 @@ io.on('connection', (socket) => {
             gameState.mainCaller = socket.id;
             gameState.mainCards = mainCards;
             gameState.mainCalled = true;
-            gameState.counterMainDeadline = Date.now() + 10000; // 10秒反主时间
             
-            // 通知所有玩家
+            // 更新 preGameState
+            gameState.preGameState = {
+                ...gameState.preGameState,
+                canCallMain: false,    // 不能再直接叫主
+                canStealMain: true,    // 可以反主
+                stealMainDeadline: Date.now() + 10000  // 反主截止时间
+            };
+            
+            // 通知所有玩家主花色已经被叫出
             io.to(roomId).emit('mainCalled', {
                 mainSuit,
                 mainCaller: socket.id,
                 mainCards,
-                counterMainDeadline: gameState.counterMainDeadline
+                stealMainDeadline: gameState.preGameState.stealMainDeadline
             });
             
-            console.log('Updated game state:', gameState);
-        } else {
-            console.log('Cannot call main:', { 
-                hasGameState: !!gameState, 
-                alreadyCalled: gameState?.mainCalled,
-                availableRooms: Array.from(rooms.keys())
+            // 通知所有玩家游戏状态已更新
+            io.to(roomId).emit('updateGameState', {
+                phase: 'pregame',
+                preGameState: gameState.preGameState
             });
-            
-            socket.emit('callMainError', { 
-                error: gameState ? 'Main already called' : 'Game not found',
-                availableRooms: Array.from(rooms.keys()),
-                availableGames: Array.from(games.keys()),
-                roomId
-            });
+
+            // 设置反主时间结束的定时器
+            setTimeout(() => {
+                // 10秒后，结束反主阶段
+                gameState.preGameState = {
+                    ...gameState.preGameState,
+                    canStealMain: false  // 不能再反主
+                };
+                
+                io.to(roomId).emit('updateGameState', {
+                    phase: 'pregame',
+                    preGameState: gameState.preGameState
+                });
+                
+                // 这里可以添加进入下一阶段的逻辑
+                // 例如，进入粘牌阶段或直接开始游戏
+            }, 10000);
         }
     });
 
@@ -439,7 +464,7 @@ io.on('connection', (socket) => {
 
     // 创建测试游戏（一键式测试）
     socket.on('createTestGame', () => {
-        // 创建一个新房间
+        console.log('Creating test game...');
         const roomId = Math.random().toString(36).slice(2, 8);
         
         // 添加真实玩家（当前连接的用户）
@@ -461,10 +486,11 @@ io.on('connection', (socket) => {
         }
         
         // 创建房间
-        rooms.set(roomId, {
+        const room = {
             id: roomId,
             players: players
-        });
+        };
+        rooms.set(roomId, room);
         
         socket.join(roomId);
         
@@ -481,44 +507,120 @@ io.on('connection', (socket) => {
             mainSuit: null,
             mainCaller: null,
             mainCards: null,
-            phase: 'dealing',
+            phase: 'pregame',           // 游戏阶段
+            preGameState: {            // pregame 阶段的子状态
+                isDealing: true,       // 是否在发牌
+                canCallMain: true      // 是否可以叫主
+            },
             currentRound: [],
             bottomCards: [],
             isMainFixed: false,
-            mainCallDeadline: Date.now() + 100000,
+            mainCallDeadline: Date.now() + 100000, // 叫主截止时间
             counterMainDeadline: null,
             mainCalled: false
         };
 
-        // 预先分配好牌
-        for (let i = 0; i < 26; i++) {
-            for (let j = 0; j < 4; j++) {
-                const card = gameState.deck.pop();
-                gameState.players[j].cards.push(card);
+        // 预先准备好牌，但不立即分配
+        const preparedCards = {
+            player: [
+                { suit: 'JOKER', value: 'BIG' },  // 大王
+                { suit: 'HEARTS', value: 'A' },    // 红桃A
+                { suit: 'HEARTS', value: 'A' }     // 红桃A
+            ],
+            remainingDeck: deck.filter(card => 
+                !(card.suit === 'JOKER' && card.value === 'BIG') &&
+                !(card.suit === 'HEARTS' && card.value === 'A')
+            )
+        };
+
+        // 修改 dealNextRound 函数的调用方式
+        function dealTestCards(currentRound = 0) {
+            const totalRounds = 26;
+            console.log(`Dealing test round ${currentRound + 1}/${totalRounds}`);
+
+            // 第一张牌时，设置初始状态
+            if (currentRound === 0) {
+                console.log('First test card dealt, can start calling main');
+                gameState.preGameState = {
+                    isDealing: true,
+                    canCallMain: true
+                };
+                io.to(roomId).emit('updateGameState', {
+                    phase: 'pregame',
+                    preGameState: gameState.preGameState
+                });
             }
+
+            if (currentRound >= totalRounds) {
+                console.log('All cards dealt');
+                io.to(roomId).emit('updateGameState', {
+                    phase: 'pregame',
+                    preGameState: gameState.preGameState
+                });
+                return;
+            }
+
+            // 给真实玩家发牌
+            if (currentRound < 3) {
+                // 发送预设的前三张牌
+                io.to(socket.id).emit('receiveCard', {
+                    card: preparedCards.player[currentRound],
+                    cardIndex: currentRound,
+                    totalCards: totalRounds
+                });
+                gameState.players[0].cards[currentRound] = preparedCards.player[currentRound];
+            } else {
+                // 发送随机牌
+                const card = preparedCards.remainingDeck.pop();
+                io.to(socket.id).emit('receiveCard', {
+                    card,
+                    cardIndex: currentRound,
+                    totalCards: totalRounds
+                });
+                gameState.players[0].cards[currentRound] = card;
+            }
+
+            // 给机器人发牌
+            for (let i = 1; i < 4; i++) {
+                const card = preparedCards.remainingDeck.pop();
+                gameState.players[i].cards[currentRound] = card;
+            }
+
+            // 广播发牌进度
+            io.to(roomId).emit('dealingProgress', {
+                currentRound: currentRound + 1,
+                totalRounds
+            });
+
+            // 继续下一轮发牌
+            setTimeout(() => {
+                dealTestCards(currentRound + 1);
+            }, 1000);
         }
 
-        // 保存底牌
-        gameState.bottomCards = gameState.deck;
-        console.log('Bottom cards:', gameState.bottomCards);
-        
         // 存储游戏状态
         games.set(roomId, gameState);
         
-        // 确保客户端先收到 roomId
+        // 确保客户端先收到房间信息
+        socket.emit('joinRoomSuccess', roomId);
+        io.to(roomId).emit('roomInfo', room);
+        
+        // 发送测试游戏创建成功消息
         socket.emit('testGameCreated', { 
             roomId,
             message: '测试模式：已自动添加3个机器人玩家，您可以随时返回大厅'
         });
         
-        // 通知玩家游戏开始
-        io.to(roomId).emit('gameStart');
-        
-        // 等待客户端发送 ready 信号后再开始发牌
-        socket.once('clientReady', () => {
-            console.log('Client ready, starting to deal cards for test game');
-            dealNextRound(gameState, roomId, 0);
-        });
+        // 开始游戏和发牌
+        setTimeout(() => {
+            console.log('Starting test game...');
+            io.to(roomId).emit('gameStart');
+            
+            // 使用新的发牌函数
+            setTimeout(() => {
+                dealTestCards(0);
+            }, 1000);
+        }, 2000);
     });
 });
 

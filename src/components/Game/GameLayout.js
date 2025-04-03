@@ -19,8 +19,10 @@ import '../../cards.css';
 function GameLayout() {
     // 基础状态
     const [playerCards, setPlayerCards] = useState([]); // 当前玩家手牌
-    const [isDealing, setIsDealing] = useState(true); // 是否在发牌中
+    const [isDealing, setIsDealing] = useState(true);          // 是否在发牌中
     const [dealingProgress, setDealingProgress] = useState(0); // 发牌进度
+    const [gamePhase, setGamePhase] = useState('pregame');     // 游戏阶段：'waiting'/'pregame'/'playing'/'aftergame'
+    const [preGameState, setPreGameState] = useState({ isDealing: false, canCallMain: false }); // pregame 阶段的子状态
     
     // 游戏状态
     const [mainSuit, setMainSuit] = useState(null); // 当前主色
@@ -124,38 +126,82 @@ function GameLayout() {
     useEffect(() => {
         console.log('设置 socket 监听器');
         
+        // 监听游戏开始
+        socket.on('gameStart', () => {
+            console.log('收到游戏开始事件');
+            setGamePhase('pregame');
+            setIsDealing(true);
+            setDealingProgress(0);
+            console.log('发送 clientReady 信号');
+            socket.emit('clientReady');
+        });
+        
         // 监听单轮发牌
         socket.on('receiveCard', ({ card, cardIndex, totalCards }) => {
-            console.log('收到一张牌:', card);
+            console.log('收到一张牌:', card, '索引:', cardIndex);
             setPlayerCards(prev => {
-                const newCards = [...prev];
+                // 创建一个新数组，确保有足够的空间
+                const newCards = Array.from({ length: totalCards }, (_, i) => prev[i] || null);
+                // 将新牌放入对应位置
                 newCards[cardIndex] = card;
+                // 过滤掉空值并排序
                 return sortCards(newCards.filter(Boolean));
             });
         });
 
         // 监听发牌进度
         socket.on('dealingProgress', ({ currentRound, totalRounds }) => {
+            console.log(`发牌进度更新: ${currentRound}/${totalRounds}`);
             const progress = (currentRound / totalRounds) * 100;
             setDealingProgress(progress);
-            console.log(`发牌进度: ${currentRound}/${totalRounds}`);
             if (currentRound === totalRounds) {
+                console.log('发牌完成');
                 setIsDealing(false);
+                setDealingProgress(100);
             }
         });
 
         // 监听游戏状态更新
         socket.on('updateGameState', (gameState) => {
+            console.log('游戏状态更新:', gameState);
             if (gameState.phase) {
-                // 处理游戏阶段更新
+                setGamePhase(gameState.phase);
+            }
+            
+            if (gameState.preGameState) {
+                setPreGameState(gameState.preGameState);
+                setIsDealing(gameState.preGameState.isDealing);
+                setCanCallMain(gameState.preGameState.canCallMain);
+            }
+        });
+
+        // 监听叫主事件
+        socket.on('mainCalled', ({ mainSuit, mainCaller, mainCards, stealMainDeadline }) => {
+            console.log('有人叫主:', { mainSuit, mainCaller, mainCards });
+            setMainSuit(mainSuit);
+            setMainCaller(mainCaller);
+            setMainCards(mainCards);
+            setMainCalled(true);
+
+            // 设置反主倒计时
+            if (stealMainDeadline) {
+                const countdownInterval = setInterval(() => {
+                    const remainingTime = Math.max(0, Math.floor((stealMainDeadline - Date.now()) / 1000));
+                    // 更新UI显示剩余时间
+                    if (remainingTime <= 0) {
+                        clearInterval(countdownInterval);
+                    }
+                }, 1000);
             }
         });
 
         return () => {
             console.log('清理 socket 监听器');
+            socket.off('gameStart');
             socket.off('receiveCard');
             socket.off('dealingProgress');
             socket.off('updateGameState');
+            socket.off('mainCalled');
         };
     }, [sortCards]);
 
@@ -166,10 +212,12 @@ function GameLayout() {
                 mainSuit={mainSuit}
                 mainCaller={mainCaller}
                 mainCards={mainCards}
+                gamePhase={gamePhase}
+                preGameState={preGameState}
             />
 
             {/* 发牌进度显示 */}
-            {isDealing && (
+            {gamePhase === 'pregame' && preGameState.isDealing && (
                 <Center position="absolute" top="50%" left="50%" transform="translate(-50%, -50%)">
                     <Box w="300px">
                         <Text mb={2} textAlign="center">发牌中... {Math.floor(dealingProgress)}%</Text>
@@ -201,43 +249,44 @@ function GameLayout() {
                         </Button>
                     </HStack>
 
-                    {/* 花色对子选择 */}
-                    <HStack spacing={0}>
-                        {['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].map((suit, index) => (
-                            <Menu key={suit}>
-                                <MenuButton
-                                    as={Button}
-                                    colorScheme={selectedPair?.suit === suit ? 'green' : 'gray'}
-                                    isDisabled={getPairs(suit).length === 0}
-                                >
-                                    {suit === 'HEARTS' ? '♥' : 
-                                     suit === 'SPADES' ? '♠' : 
-                                     suit === 'DIAMONDS' ? '♦' : '♣'}
-                                </MenuButton>
-                                <MenuList>
-                                    {getPairs(suit).map(value => (
-                                        <MenuItem
-                                            key={value}
-                                            onClick={() => handlePairSelect(suit, value)}
-                                        >
-                                            {value}
-                                        </MenuItem>
-                                    ))}
-                                </MenuList>
-                            </Menu>
-                        ))}
-                    </HStack>
+                        {/* 花色对子选择 */}
+                        <HStack spacing={0}>
+                            {['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].map((suit, index) => (
+                                <Menu key={suit}>
+                                    <MenuButton
+                                        as={Button}
+                                        colorScheme={selectedPair?.suit === suit ? 'green' : 'gray'}
+                                        isDisabled={getPairs(suit).length === 0}
+                                    >
+                                        {suit === 'HEARTS' ? '♥' : 
+                                         suit === 'SPADES' ? '♠' : 
+                                         suit === 'DIAMONDS' ? '♦' : '♣'}
+                                    </MenuButton>
+                                    <MenuList>
+                                        {getPairs(suit).map(value => (
+                                            <MenuItem
+                                                key={value}
+                                                onClick={() => handlePairSelect(suit, value)}
+                                            >
+                                                {value}
+                                            </MenuItem>
+                                        ))}
+                                    </MenuList>
+                                </Menu>
+                            ))}
+                        </HStack>
 
-                    {/* 叫主按钮 */}
-                    <Button
-                        colorScheme="blue"
-                        onClick={handleCallMain}
-                        isDisabled={!canCallMain}
-                    >
-                        叫主
-                    </Button>
-                </HStack>
-            </Center>
+                        {/* 叫主按钮 */}
+                        <Button
+                            colorScheme="blue"
+                            onClick={handleCallMain}
+                            isDisabled={!canCallMain}
+                        >
+                            叫主
+                        </Button>
+                    </HStack>
+                </Center>
+            
 
             {/* 玩家手牌区域 */}
             <Center 
