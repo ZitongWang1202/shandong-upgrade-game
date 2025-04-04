@@ -292,15 +292,13 @@ io.on('connection', (socket) => {
                 ...gameState.preGameState,
                 canCallMain: false,    // 不能再直接叫主
                 canStealMain: true,    // 可以反主
-                stealMainDeadline: Date.now() + 10000  // 反主截止时间
             };
             
             // 通知所有玩家主花色已经被叫出
             io.to(roomId).emit('mainCalled', {
                 mainSuit,
                 mainCaller: socket.id,
-                mainCards,
-                stealMainDeadline: gameState.preGameState.stealMainDeadline
+                mainCards
             });
             
             // 通知所有玩家游戏状态已更新
@@ -310,21 +308,21 @@ io.on('connection', (socket) => {
             });
 
             // 设置反主时间结束的定时器
-            setTimeout(() => {
-                // 10秒后，结束反主阶段
-                gameState.preGameState = {
-                    ...gameState.preGameState,
-                    canStealMain: false  // 不能再反主
-                };
+            // setTimeout(() => {
+            //     // 10秒后，结束反主阶段
+            //     gameState.preGameState = {
+            //         ...gameState.preGameState,
+            //         canStealMain: false  // 不能再反主
+            //     };
                 
-                io.to(roomId).emit('updateGameState', {
-                    phase: 'pregame',
-                    preGameState: gameState.preGameState
-                });
+            //     io.to(roomId).emit('updateGameState', {
+            //         phase: 'pregame',
+            //         preGameState: gameState.preGameState
+            //     });
                 
-                // 这里可以添加进入下一阶段的逻辑
-                // 例如，进入粘牌阶段或直接开始游戏
-            }, 10000);
+            //     // 这里可以添加进入下一阶段的逻辑
+            //     // 例如，进入粘牌阶段或直接开始游戏
+            // }, 10000);
         }
     });
 
@@ -365,10 +363,11 @@ io.on('connection', (socket) => {
             
             // 获取原来的叫主玩家的ID
             const originalMainCaller = gameState.mainCaller;
+            const originalMainSuit = gameState.mainSuit;
             
             // 反主成功，更新主信息
             gameState.mainCaller = socket.id;
-            gameState.mainSuit = mainSuit;
+            gameState.mainSuit = mainSuit;  // 更新为反主玩家设置的花色
             gameState.mainCards = mainCards;
             
             // 反主后，不可再反主或加固
@@ -377,7 +376,7 @@ io.on('connection', (socket) => {
             // 通知所有玩家
             io.to(roomId).emit('mainCountered', {
                 mainCaller: socket.id,
-                originalMainCaller, // 添加原叫主玩家的ID
+                originalMainCaller,
                 mainSuit,
                 mainCards
             });
@@ -929,16 +928,14 @@ io.on('connection', (socket) => {
                     gameState.preGameState = {
                         ...gameState.preGameState,
                         canCallMain: false,    // 不能再直接叫主
-                        canStealMain: true,    // 可以反主
-                        stealMainDeadline: Date.now() + 20000  // 反主截止时间（给20秒时间）
+                        canStealMain: true     // 可以反主
                     };
                     
                     // 通知所有玩家主花色已经被叫出
                     io.to(roomId).emit('mainCalled', {
                         mainSuit,
                         mainCaller: players[1].id,
-                        mainCards,
-                        stealMainDeadline: gameState.preGameState.stealMainDeadline
+                        mainCards
                     });
                     
                     // 通知所有玩家游戏状态已更新
@@ -1016,6 +1013,221 @@ io.on('connection', (socket) => {
             // 使用新的发牌函数
             setTimeout(() => {
                 dealCounterTestCards(0);
+            }, 1000);
+        }, 2000);
+    });
+
+    // 创建机器人加固测试游戏
+    socket.on('createBotFixTestGame', () => {
+        console.log('Creating bot fix main test game...');
+        const roomId = Math.random().toString(36).slice(2, 8);
+        
+        // 添加真实玩家（当前连接的用户）
+        const players = [{
+            id: socket.id,
+            ready: true,  // 自动准备
+            name: `玩家${socket.id.slice(0, 4)}`
+        }];
+        
+        // 添加3个机器人玩家
+        for (let i = 1; i <= 3; i++) {
+            const botId = `bot-${i}-${Math.random().toString(36).slice(2, 6)}`;
+            players.push({
+                id: botId,
+                ready: true,
+                name: `机器人${i}`,
+                isBot: true
+            });
+        }
+        
+        // 创建房间
+        const room = {
+            id: roomId,
+            players: players
+        };
+        rooms.set(roomId, room);
+        
+        socket.join(roomId);
+        
+        // 创建游戏状态
+        const deck = shuffleDeck(createDeck());
+        const gameState = {
+            deck: deck,
+            players: players.map(p => ({
+                ...p,
+                cards: [],
+                isDealer: false
+            })),
+            currentTurn: null,
+            mainSuit: null,
+            mainCaller: null,
+            mainCards: null,
+            phase: 'pregame',
+            preGameState: {
+                isDealing: true,
+                canCallMain: true
+            },
+            currentRound: [],
+            bottomCards: [],
+            isMainFixed: false,
+            mainCallDeadline: Date.now() + 100000,
+            counterMainDeadline: null,
+            mainCalled: false
+        };
+
+        // 预先准备机器人的牌（用于叫主和加固）
+        const botCards = [
+            { suit: 'JOKER', value: 'BIG' },  // 大王1
+            { suit: 'JOKER', value: 'BIG' },  // 大王2
+            { suit: 'HEARTS', value: 'A' },   // 红桃A1
+            { suit: 'HEARTS', value: 'A' }    // 红桃A2
+        ];
+        
+        // 从牌堆中移除这些已经分配的牌
+        const remainingDeck = deck.filter(card => 
+            !(botCards.some(bc => bc.suit === card.suit && bc.value === card.value))
+        );
+
+        function dealBotFixTestCards(currentRound = 0) {
+            const totalRounds = 26;
+            console.log(`Dealing bot fix test round ${currentRound + 1}/${totalRounds}`);
+
+            // 第一张牌时，设置初始状态
+            if (currentRound === 0) {
+                console.log('First bot fix test card dealt, can start calling main');
+                gameState.preGameState = {
+                    isDealing: true,
+                    canCallMain: true
+                };
+                io.to(roomId).emit('updateGameState', {
+                    phase: 'pregame',
+                    preGameState: gameState.preGameState
+                });
+            }
+
+            if (currentRound >= totalRounds) {
+                console.log('All cards dealt');
+                io.to(roomId).emit('updateGameState', {
+                    phase: 'pregame',
+                    preGameState: gameState.preGameState
+                });
+                
+                // 发牌完成后，让机器人叫主
+                setTimeout(() => {
+                    console.log('Bot calling main...');
+                    const mainSuit = 'HEARTS';
+                    const mainCards = {
+                        joker: 'BIG',
+                        pair: { suit: 'HEARTS', value: 'A' }
+                    };
+                    
+                    // 更新游戏状态
+                    gameState.mainSuit = mainSuit;
+                    gameState.mainCaller = players[1].id; // 机器人1
+                    gameState.mainCards = mainCards;
+                    gameState.mainCalled = true;
+                    
+                    // 更新 preGameState
+                    gameState.preGameState = {
+                        ...gameState.preGameState,
+                        canCallMain: false,    // 不能再直接叫主
+                        canStealMain: true,    // 可以反主
+                    };
+                    
+                    // 通知所有玩家主花色已经被叫出
+                    io.to(roomId).emit('mainCalled', {
+                        mainSuit,
+                        mainCaller: players[1].id,
+                        mainCards
+                    });
+                    
+                    // 通知所有玩家游戏状态已更新
+                    io.to(roomId).emit('updateGameState', {
+                        phase: 'pregame',
+                        preGameState: gameState.preGameState
+                    });
+                    
+                    // 等待几秒后，机器人加固
+                    setTimeout(() => {
+                        console.log('Bot fixing main...');
+                        
+                        // 加固成功
+                        gameState.preGameState.canStealMain = false;  // 不能再反主
+                        gameState.isMainFixed = true;  // 设置主已加固的标志
+                        
+                        // 通知所有玩家主已加固
+                        io.to(roomId).emit('mainFixed', {
+                            mainCaller: players[1].id,
+                            isMainFixed: true
+                        });
+                        
+                        // 更新游戏状态
+                        io.to(roomId).emit('updateGameState', {
+                            phase: 'pregame',
+                            preGameState: gameState.preGameState,
+                            isMainFixed: gameState.isMainFixed
+                        });
+                    }, 5000); // 5秒后加固
+                    
+                }, 3000); // 3秒后叫主
+                
+                return;
+            }
+
+            // 给真实玩家发随机牌
+            const card = remainingDeck.pop();
+            io.to(socket.id).emit('receiveCard', {
+                card,
+                cardIndex: currentRound,
+                totalCards: totalRounds
+            });
+            gameState.players[0].cards[currentRound] = card;
+
+            // 给机器人发牌
+            for (let i = 1; i < 4; i++) {
+                if (i === 1 && currentRound < botCards.length) {
+                    // 给第一个机器人发预设的牌（用于叫主和加固）
+                    gameState.players[i].cards[currentRound] = botCards[currentRound];
+                } else {
+                    // 给其他机器人发随机牌
+                    const card = remainingDeck.pop();
+                    gameState.players[i].cards[currentRound] = card;
+                }
+            }
+
+            // 广播发牌进度
+            io.to(roomId).emit('dealingProgress', {
+                currentRound: currentRound + 1,
+                totalRounds
+            });
+
+            // 继续下一轮发牌
+            setTimeout(() => {
+                dealBotFixTestCards(currentRound + 1);
+            }, 1000);
+        }
+
+        // 存储游戏状态
+        games.set(roomId, gameState);
+        
+        // 确保客户端先收到房间信息
+        socket.emit('joinRoomSuccess', roomId);
+        io.to(roomId).emit('roomInfo', room);
+        
+        // 发送测试游戏创建成功消息
+        socket.emit('testGameCreated', { 
+            roomId,
+            message: '机器人加固测试：机器人将收到两张大王和两张红桃A，它会叫主并在5秒后加固'
+        });
+        
+        // 开始游戏和发牌
+        setTimeout(() => {
+            console.log('Starting bot fix test game...');
+            io.to(roomId).emit('gameStart');
+            
+            // 使用新的发牌函数
+            setTimeout(() => {
+                dealBotFixTestCards(0);
             }, 1000);
         }, 2000);
     });

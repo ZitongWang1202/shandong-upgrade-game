@@ -265,11 +265,11 @@ function GameLayout() {
         });
 
         // 监听叫主事件
-        socket.on('mainCalled', ({ mainSuit, mainCaller, mainCards, stealMainDeadline }) => {
+        socket.on('mainCalled', ({ mainSuit, mainCaller, mainCards }) => {
             console.log('有人叫主:', { mainSuit, mainCaller, mainCards });
             setMainSuit(mainSuit);
             setMainCaller(mainCaller);
-            setMainCards(mainCards);  // 保存叫主牌型信息
+            setMainCards(mainCards);
             setMainCalled(true);
             
             // 检查当前玩家是否是叫主玩家
@@ -307,11 +307,12 @@ function GameLayout() {
         });
 
         // 反主监听
-        socket.on('mainCountered', ({ mainCaller, originalMainCaller, mainCards }) => {
-            console.log('有人反主:', { mainCaller, originalMainCaller, mainCards });
+        socket.on('mainCountered', ({ mainCaller, originalMainCaller, mainSuit, mainCards }) => {
+            console.log('有人反主:', { mainCaller, originalMainCaller, mainSuit, mainCards });
             
-            // 更新主叫者和主牌信息
+            // 更新主叫者、主花色和牌型信息
             setMainCaller(mainCaller);
+            setMainSuit(mainSuit);  // 设置为反主玩家的花色
             setMainCards(mainCards);
             
             // 任何人反主后，不可再加固
@@ -354,6 +355,8 @@ function GameLayout() {
                 mainCards={mainCards}
                 gamePhase={gamePhase}
                 preGameState={preGameState}
+                isMainFixed={isMainFixed}
+                hasCounteredMain={hasCounteredMain}
             />
 
             {/* 发牌进度显示 */}
@@ -378,7 +381,7 @@ function GameLayout() {
                                 onClick={() => handleJokerSelect('BIG')}
                                 isDisabled={!hasJoker('BIG')}
                             >
-                                大王
+                                <Text color="red">大王</Text>
                             </Button>
                             <Button
                                 colorScheme={selectedJoker === 'SMALL' ? 'green' : 'gray'}
@@ -398,9 +401,9 @@ function GameLayout() {
                                         colorScheme={selectedPair?.suit === suit ? 'green' : 'gray'}
                                         isDisabled={getPairs(suit).length === 0}
                                     >
-                                        {suit === 'HEARTS' ? '♥' : 
-                                         suit === 'SPADES' ? '♠' : 
-                                         suit === 'DIAMONDS' ? '♦' : '♣'}
+                                        {suit === 'HEARTS' ? '♥️' : 
+                                         suit === 'SPADES' ? '♠️' : 
+                                         suit === 'DIAMONDS' ? '♦️' : '♣️'}
                                     </MenuButton>
                                     <MenuList>
                                         {getPairs(suit).map(value => (
@@ -440,7 +443,7 @@ function GameLayout() {
                                         onClick={() => setCounterJoker('BIG')}
                                         isDisabled={!hasJokerPair('BIG')}
                                     >
-                                        大王(对)
+                                        <Text color="red">大王(对)</Text>
                                     </Button>
                                     <Button
                                         colorScheme={counterJoker === 'SMALL' ? 'green' : 'gray'}

@@ -77,6 +77,12 @@ const LobbyPage = () => {
     socket.emit('createCounterTestGame');
   };
 
+  // 创建机器人加固测试游戏
+  const createBotFixTestGame = () => {
+    console.log('Creating bot fix main test game');
+    socket.emit('createBotFixTestGame');
+  };
+
   return (
     <Container maxW="container.xl" py={8}>
       <VStack spacing={8} align="stretch">
@@ -99,6 +105,11 @@ const LobbyPage = () => {
             <Tooltip label="反主测试：机器人叫主，玩家有两张小王和两张黑桃A可以反主" hasArrow>
               <Button colorScheme="red" onClick={createCounterTestGame}>
                 反主测试
+              </Button>
+            </Tooltip>
+            <Tooltip label="机器人加固测试：机器人叫主并加固，测试客户端反应" hasArrow>
+              <Button colorScheme="orange" onClick={createBotFixTestGame}>
+                机器人加固
               </Button>
             </Tooltip>
           </HStack>
