@@ -36,6 +36,18 @@ function GameLayout() {
     const [selectedConsecutivePair, setSelectedConsecutivePair] = useState(null);
     const [canCallMain, setCanCallMain] = useState(false);
     const [canStealMain, setCanStealMain] = useState(false);
+    const [canFixMain, setCanFixMain] = useState(false);    // 是否可以加固
+    const [canCounterMain, setCanCounterMain] = useState(false); // 是否可以反主
+    const [showFixButton, setShowFixButton] = useState(false); // 是否显示加固按钮
+    const [showCounterButton, setShowCounterButton] = useState(false); // 是否显示反主按钮
+    const [counterJoker, setCounterJoker] = useState(null); // 反主选中的王
+    const [counterPair, setCounterPair] = useState(null); // 反主选中的对子
+
+    // 添加一个新状态
+    const [isMainFixed, setIsMainFixed] = useState(false);
+
+    // 添加一个状态表示是否反主
+    const [hasCounteredMain, setHasCounteredMain] = useState(false);
 
     // 计算牌的权重（用于排序）
     const getCardWeight = useCallback((card) => {
@@ -122,6 +134,60 @@ function GameLayout() {
         }
     };
 
+    // 添加新的函数来检查是否可以加固
+    const checkCanFixMain = (usedJoker) => {
+        console.log('检查是否可以加固，使用的王为:', usedJoker);
+        // 检查是否有两张相同的王
+        if (usedJoker) {
+            const jokerCount = playerCards.filter(card => 
+                card.suit === 'JOKER' && card.value === usedJoker
+            ).length;
+            console.log('找到相同的王数量:', jokerCount);
+            setCanFixMain(jokerCount >= 2);
+        } else {
+            setCanFixMain(false);
+        }
+    };
+
+    // 添加新的函数来检查是否可以反主
+    const checkCanCounterMain = () => {
+        // 检查是否有两张相同的王和一对牌
+        const hasBigJokerPair = hasJokerPair('BIG');
+        const hasSmallJokerPair = hasJokerPair('SMALL');
+        const hasPair = Object.values(getPairs('HEARTS')).length > 0 || 
+                       Object.values(getPairs('SPADES')).length > 0 || 
+                       Object.values(getPairs('DIAMONDS')).length > 0 || 
+                       Object.values(getPairs('CLUBS')).length > 0;
+        
+        setCanCounterMain((hasBigJokerPair || hasSmallJokerPair) && hasPair);
+    };
+
+    // 处理反主
+    const handleCounterMain = () => {
+        if (canCounterMain && counterJoker && counterPair) {
+            socket.emit('counterMain', {
+                roomId: localStorage.getItem('roomId'),
+                mainSuit: counterPair.suit,
+                mainCards: {
+                    joker: counterJoker,
+                    pair: counterPair
+                }
+            });
+            
+            // 本地先设置为已反主
+            setHasCounteredMain(true);
+        }
+    };
+
+    // 添加加固的处理
+    const handleFixMain = () => {
+        if (canFixMain && !isMainFixed) {
+            socket.emit('fixMain', {
+                roomId: localStorage.getItem('roomId')
+            });
+        }
+    };
+
     // 监听服务器事件
     useEffect(() => {
         console.log('设置 socket 监听器');
@@ -139,13 +205,31 @@ function GameLayout() {
         // 监听单轮发牌
         socket.on('receiveCard', ({ card, cardIndex, totalCards }) => {
             console.log('收到一张牌:', card, '索引:', cardIndex);
+            if (card.suit === 'JOKER' && card.value === 'BIG') {
+                console.log('收到大王');
+            }
+            
             setPlayerCards(prev => {
                 // 创建一个新数组，确保有足够的空间
                 const newCards = Array.from({ length: totalCards }, (_, i) => prev[i] || null);
                 // 将新牌放入对应位置
                 newCards[cardIndex] = card;
                 // 过滤掉空值并排序
-                return sortCards(newCards.filter(Boolean));
+                const updatedCards = sortCards(newCards.filter(Boolean));
+                
+                // 检查是否可以加固或反主
+                if (mainCalled) {
+                    if (mainCaller === socket.id) {
+                        console.log('我是叫主玩家，检查是否可以加固');
+                        console.log('使用的王:', mainCards?.joker);
+                        checkCanFixMain(mainCards?.joker);
+                    } else {
+                        console.log('我是其他玩家，检查是否可以反主');
+                        checkCanCounterMain();
+                    }
+                }
+                
+                return updatedCards;
             });
         });
 
@@ -173,6 +257,11 @@ function GameLayout() {
                 setIsDealing(gameState.preGameState.isDealing);
                 setCanCallMain(gameState.preGameState.canCallMain);
             }
+            
+            // 同步加固状态
+            if (gameState.isMainFixed !== undefined) {
+                setIsMainFixed(gameState.isMainFixed);
+            }
         });
 
         // 监听叫主事件
@@ -180,19 +269,68 @@ function GameLayout() {
             console.log('有人叫主:', { mainSuit, mainCaller, mainCards });
             setMainSuit(mainSuit);
             setMainCaller(mainCaller);
-            setMainCards(mainCards);
+            setMainCards(mainCards);  // 保存叫主牌型信息
             setMainCalled(true);
-
-            // 设置反主倒计时
-            if (stealMainDeadline) {
-                const countdownInterval = setInterval(() => {
-                    const remainingTime = Math.max(0, Math.floor((stealMainDeadline - Date.now()) / 1000));
-                    // 更新UI显示剩余时间
-                    if (remainingTime <= 0) {
-                        clearInterval(countdownInterval);
-                    }
-                }, 1000);
+            
+            // 检查当前玩家是否是叫主玩家
+            if (mainCaller === socket.id) {
+                console.log('我是叫主玩家');
+                setShowFixButton(true);
+                // 检查是否有另一张相同的王可以用来加固
+                console.log('检查是否可以加固，使用的王:', mainCards?.joker);
+                checkCanFixMain(mainCards?.joker);
+            } else {
+                // 是其他玩家，重置选择状态
+                setSelectedJoker(null);
+                setShowCounterButton(true);
+                // 检查反主条件
+                checkCanCounterMain();
             }
+        });
+
+        // 加固监听
+        socket.on('mainFixed', (data) => {
+            console.log('主花色已加固:', data);
+            setCanCounterMain(false);
+            setIsMainFixed(true);
+            
+            // 添加显示其他玩家的加固状态逻辑
+            if (data.mainCaller !== socket.id) {
+                // 其他玩家已加固，可以显示消息
+                console.log(`玩家 ${data.mainCaller} 已加固主花色`);
+            }
+            
+            setPreGameState(prev => ({
+                ...prev,
+                canStealMain: false
+            }));
+        });
+
+        // 反主监听
+        socket.on('mainCountered', ({ mainCaller, originalMainCaller, mainCards }) => {
+            console.log('有人反主:', { mainCaller, originalMainCaller, mainCards });
+            
+            // 更新主叫者和主牌信息
+            setMainCaller(mainCaller);
+            setMainCards(mainCards);
+            
+            // 任何人反主后，不可再加固
+            setShowFixButton(false);
+            setCanFixMain(false);
+            
+            // 如果当前玩家是反主玩家，设置为已反主
+            if (socket.id === mainCaller) {
+                setHasCounteredMain(true);
+            }
+            
+            // 更新状态，不可再反主，但不要隐藏按钮
+            setCanCounterMain(false);
+            
+            // 更新 preGameState
+            setPreGameState(prev => ({
+                ...prev,
+                canStealMain: false
+            }));
         });
 
         return () => {
@@ -202,8 +340,10 @@ function GameLayout() {
             socket.off('dealingProgress');
             socket.off('updateGameState');
             socket.off('mainCalled');
+            socket.off('mainFixed');
+            socket.off('mainCountered');
         };
-    }, [sortCards]);
+    }, [sortCards, playerCards, mainCalled, mainCaller, mainCards]);
 
     // 渲染界面
     return (
@@ -228,30 +368,30 @@ function GameLayout() {
 
             {/* 操作区域 */}
             <Center position="absolute" top="60%" left="50%" transform="translate(-50%, -50%)">
-                <HStack spacing={4}>
-                    {/* 大小王选择 */}
-                    <HStack spacing={2}>
-                        <Button
-                            colorScheme={selectedJoker === 'BIG' ? 'green' : 'gray'}
-                            onClick={() => handleJokerSelect('BIG')}
-                            isDisabled={!hasJoker('BIG')}
-                        >
-                            大王
-                            {hasJokerPair('BIG') && ' (对)'}
-                        </Button>
-                        <Button
-                            colorScheme={selectedJoker === 'SMALL' ? 'green' : 'gray'}
-                            onClick={() => handleJokerSelect('SMALL')}
-                            isDisabled={!hasJoker('SMALL')}
-                        >
-                            小王
-                            {hasJokerPair('SMALL') && ' (对)'}
-                        </Button>
-                    </HStack>
+                {/* 未叫主状态下的叫主界面 */}
+                {!mainCalled && preGameState.canCallMain && (
+                    <HStack spacing={4}>
+                        {/* 大小王选择 */}
+                        <HStack spacing={2}>
+                            <Button
+                                colorScheme={selectedJoker === 'BIG' ? 'green' : 'gray'}
+                                onClick={() => handleJokerSelect('BIG')}
+                                isDisabled={!hasJoker('BIG')}
+                            >
+                                大王
+                            </Button>
+                            <Button
+                                colorScheme={selectedJoker === 'SMALL' ? 'green' : 'gray'}
+                                onClick={() => handleJokerSelect('SMALL')}
+                                isDisabled={!hasJoker('SMALL')}
+                            >
+                                小王
+                            </Button>
+                        </HStack>
 
                         {/* 花色对子选择 */}
                         <HStack spacing={0}>
-                            {['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].map((suit, index) => (
+                            {['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].map((suit) => (
                                 <Menu key={suit}>
                                     <MenuButton
                                         as={Button}
@@ -280,12 +420,88 @@ function GameLayout() {
                         <Button
                             colorScheme="blue"
                             onClick={handleCallMain}
-                            isDisabled={!canCallMain}
+                            isDisabled={!canCallMain || !selectedJoker || !selectedPair}
                         >
                             叫主
                         </Button>
                     </HStack>
-                </Center>
+                )}
+
+                {/* 已叫主状态下 - 其他玩家的反主界面 */}
+                {mainCalled && mainCaller !== socket.id && (showCounterButton || hasCounteredMain) && (
+                    <HStack spacing={4}>
+                        {/* 大小王选择和花色对子选择 - 仅在可反主时显示 */}
+                        {preGameState.canStealMain && !hasCounteredMain && (
+                            <>
+                                {/* 大小王选择 */}
+                                <HStack spacing={2}>
+                                    <Button
+                                        colorScheme={counterJoker === 'BIG' ? 'green' : 'gray'}
+                                        onClick={() => setCounterJoker('BIG')}
+                                        isDisabled={!hasJokerPair('BIG')}
+                                    >
+                                        大王(对)
+                                    </Button>
+                                    <Button
+                                        colorScheme={counterJoker === 'SMALL' ? 'green' : 'gray'}
+                                        onClick={() => setCounterJoker('SMALL')}
+                                        isDisabled={!hasJokerPair('SMALL')}
+                                    >
+                                        小王(对)
+                                    </Button>
+                                </HStack>
+
+                                {/* 花色对子选择 */}
+                                <HStack spacing={0}>
+                                    {['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].map((suit) => (
+                                        <Menu key={suit}>
+                                            <MenuButton
+                                                as={Button}
+                                                colorScheme={counterPair?.suit === suit ? 'green' : 'gray'}
+                                                isDisabled={getPairs(suit).length === 0}
+                                            >
+                                                {suit === 'HEARTS' ? '♥' : 
+                                                 suit === 'SPADES' ? '♠' : 
+                                                 suit === 'DIAMONDS' ? '♦' : '♣'}
+                                            </MenuButton>
+                                            <MenuList>
+                                                {getPairs(suit).map(value => (
+                                                    <MenuItem
+                                                        key={value}
+                                                        onClick={() => setCounterPair({ suit, value })}
+                                                    >
+                                                        {value}
+                                                    </MenuItem>
+                                                ))}
+                                            </MenuList>
+                                        </Menu>
+                                    ))}
+                                </HStack>
+                            </>
+                        )}
+
+                        {/* 反主按钮 - 总是显示，但状态不同 */}
+                        <Button
+                            colorScheme={hasCounteredMain ? "gray" : "red"}
+                            onClick={handleCounterMain}
+                            isDisabled={hasCounteredMain || !preGameState.canStealMain || !canCounterMain || !counterJoker || !counterPair}
+                        >
+                            {hasCounteredMain ? "已反主" : "反主"}
+                        </Button>
+                    </HStack>
+                )}
+
+                {/* 已叫主状态下 - 叫主玩家的加固按钮 */}
+                {mainCalled && mainCaller === socket.id && (showFixButton || isMainFixed) && (
+                    <Button
+                        colorScheme={isMainFixed ? "gray" : "green"}
+                        onClick={handleFixMain}
+                        isDisabled={isMainFixed || !preGameState.canStealMain || !canFixMain}
+                    >
+                        {isMainFixed ? "已加固" : "加固"}
+                    </Button>
+                )}
+            </Center>
             
 
             {/* 玩家手牌区域 */}

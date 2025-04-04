@@ -66,6 +66,17 @@ const LobbyPage = () => {
     socket.emit('createTestGame');
   };
 
+  // 添加新的测试游戏函数
+  const createFixTestGame = () => {
+    console.log('Creating fix main test game with bots');
+    socket.emit('createFixTestGame');
+  };
+
+  const createCounterTestGame = () => {
+    console.log('Creating counter main test game with bots');
+    socket.emit('createCounterTestGame');
+  };
+
   return (
     <Container maxW="container.xl" py={8}>
       <VStack spacing={8} align="stretch">
@@ -78,6 +89,16 @@ const LobbyPage = () => {
             <Tooltip label="创建带有3个机器人的测试游戏，直接进入发牌阶段" hasArrow>
               <Button colorScheme="purple" onClick={createTestGame}>
                 一键测试
+              </Button>
+            </Tooltip>
+            <Tooltip label="加固测试：获得一张大王和两张红桃A，在第10张牌收到第二张大王" hasArrow>
+              <Button colorScheme="green" onClick={createFixTestGame}>
+                加固测试
+              </Button>
+            </Tooltip>
+            <Tooltip label="反主测试：机器人叫主，玩家有两张小王和两张黑桃A可以反主" hasArrow>
+              <Button colorScheme="red" onClick={createCounterTestGame}>
+                反主测试
               </Button>
             </Tooltip>
           </HStack>
