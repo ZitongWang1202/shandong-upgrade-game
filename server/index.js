@@ -52,7 +52,8 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
         console.log('First card dealt, can start calling main');
         gameState.preGameState = {
             isDealing: true,
-            canCallMain: true
+            canCallMain: true,
+            commonMain: gameState.commonMain
         };
         io.to(roomId).emit('updateGameState', {
             phase: 'pregame',
@@ -73,7 +74,10 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
             
             io.to(roomId).emit('updateGameState', {
                 phase: 'pregame',
-                preGameState: gameState.preGameState
+                preGameState: {
+                    ...gameState.preGameState,
+                    commonMain: gameState.commonMain
+                }
             });
             
             io.to(roomId).emit('mainCalled', {
@@ -89,7 +93,10 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
             
             io.to(roomId).emit('updateGameState', {
                 phase: 'pregame',
-                preGameState: gameState.preGameState
+                preGameState: {
+                    ...gameState.preGameState,
+                    commonMain: gameState.commonMain
+                }
             });
             
             // 发牌结束后10秒内没有人叫主，自动进入下一阶段
@@ -99,7 +106,10 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
                     gameState.preGameState.canCallMain = false;
                     io.to(roomId).emit('updateGameState', {
                         phase: 'pregame',
-                        preGameState: gameState.preGameState
+                        preGameState: {
+                            ...gameState.preGameState,
+                            commonMain: gameState.commonMain
+                        }
                     });
                     // 这里可以添加进入下一阶段的逻辑
                 }
@@ -261,7 +271,8 @@ io.on('connection', (socket) => {
                 isMainFixed: false,
                 mainCallDeadline: Date.now() + 100000, // 给100秒的叫主时间
                 counterMainDeadline: null,
-                mainCalled: false
+                mainCalled: false,
+                commonMain: '2'  // 初始常主为2
             };
 
             // 预先分配好牌
@@ -359,13 +370,17 @@ io.on('connection', (socket) => {
                 ...gameState.preGameState,
                 canCallMain: false,      // 不能再直接叫主
                 canStealMain: true,      // 可以反主
-                stealMainDeadline        // 反主截止时间（可能为undefined）
+                stealMainDeadline,        // 反主截止时间（可能为undefined）
+                commonMain: gameState.commonMain
             };
             
             // 通知所有玩家游戏状态已更新
             io.to(roomId).emit('updateGameState', {
                 phase: 'pregame',
-                preGameState: gameState.preGameState
+                preGameState: {
+                    ...gameState.preGameState,
+                    commonMain: gameState.commonMain
+                }
             });
 
             // 如果在发牌结束后叫主，则设置10秒后结束反主阶段
@@ -376,7 +391,10 @@ io.on('connection', (socket) => {
                         gameState.preGameState.canStealMain = false;
                         io.to(roomId).emit('updateGameState', {
                             phase: 'pregame',
-                            preGameState: gameState.preGameState
+                            preGameState: {
+                                ...gameState.preGameState,
+                                commonMain: gameState.commonMain
+                            }
                         });
                         // 这里可以添加进入下一阶段的逻辑
                     }
@@ -404,7 +422,10 @@ io.on('connection', (socket) => {
             // 更新游戏状态，也包含加固信息
             io.to(roomId).emit('updateGameState', {
                 phase: 'pregame',
-                preGameState: gameState.preGameState,
+                preGameState: {
+                    ...gameState.preGameState,
+                    commonMain: gameState.commonMain
+                },
                 isMainFixed: gameState.isMainFixed
             });
         }
@@ -443,7 +464,10 @@ io.on('connection', (socket) => {
             // 更新游戏状态
             io.to(roomId).emit('updateGameState', {
                 phase: 'pregame',
-                preGameState: gameState.preGameState
+                preGameState: {
+                    ...gameState.preGameState,
+                    commonMain: gameState.commonMain
+                }
             });
         }
     });
@@ -587,7 +611,8 @@ io.on('connection', (socket) => {
             isMainFixed: false,
             mainCallDeadline: Date.now() + 100000, // 叫主截止时间
             counterMainDeadline: null,
-            mainCalled: false
+            mainCalled: false,
+            commonMain: '2'  // 初始常主为2
         };
 
         // 预先准备好牌，但不立即分配
@@ -595,7 +620,13 @@ io.on('connection', (socket) => {
             player: [
                 { suit: 'JOKER', value: 'BIG' },  // 大王
                 { suit: 'HEARTS', value: 'A' },    // 红桃A
-                { suit: 'HEARTS', value: 'A' }     // 红桃A
+                { suit: 'HEARTS', value: 'A' },     // 红桃A
+                { suit: 'HEARTS', value: '5' },    // 红桃5
+                { suit: 'SPADES', value: '5' },    // 黑桃5
+                { suit: 'HEARTS', value: '3' },    // 红桃3
+                { suit: 'DIAMONDS', value: '3' },    // 方片3
+                { suit: 'CLUBS', value: '2' },    // 梅花2
+                { suit: 'HEARTS', value: '2' },    // 红桃2
             ],
             remainingDeck: deck.filter(card => 
                 !(card.suit === 'JOKER' && card.value === 'BIG') &&
@@ -613,7 +644,8 @@ io.on('connection', (socket) => {
                 console.log('First test card dealt, can start calling main');
                 gameState.preGameState = {
                     isDealing: true,
-                    canCallMain: true
+                    canCallMain: true,
+                    commonMain: gameState.commonMain
                 };
                 io.to(roomId).emit('updateGameState', {
                     phase: 'pregame',
@@ -634,7 +666,10 @@ io.on('connection', (socket) => {
                     
                     io.to(roomId).emit('updateGameState', {
                         phase: 'pregame',
-                        preGameState: gameState.preGameState
+                        preGameState: {
+                            ...gameState.preGameState,
+                            commonMain: gameState.commonMain
+                        }
                     });
                     
                     io.to(roomId).emit('mainCalled', {
@@ -648,7 +683,10 @@ io.on('connection', (socket) => {
                 // 更新游戏状态
                 io.to(roomId).emit('updateGameState', {
                     phase: 'pregame',
-                    preGameState: gameState.preGameState
+                    preGameState: {
+                        ...gameState.preGameState,
+                        commonMain: gameState.commonMain
+                    }
                 });
                 
                 // 设置叫主截止时间（发牌结束后10秒）
@@ -658,14 +696,17 @@ io.on('connection', (socket) => {
                 // 通知客户端
                 io.to(roomId).emit('updateGameState', {
                     phase: 'pregame',
-                    preGameState: gameState.preGameState
+                    preGameState: {
+                        ...gameState.preGameState,
+                        commonMain: gameState.commonMain
+                    }
                 });
                 
                 return;
             }
 
             // 给真实玩家发牌
-            if (currentRound < 3) {
+            if (currentRound < 9) {
                 // 发送预设的前三张牌
                 io.to(socket.id).emit('receiveCard', {
                     card: preparedCards.player[currentRound],
@@ -782,7 +823,8 @@ io.on('connection', (socket) => {
             isMainFixed: false,
             mainCallDeadline: Date.now() + 100000,
             counterMainDeadline: null,
-            mainCalled: false
+            mainCalled: false,
+            commonMain: '2'  // 初始常主为2
         };
 
         // 预先准备好牌
@@ -811,7 +853,8 @@ io.on('connection', (socket) => {
                 console.log('First test card dealt, can start calling main');
                 gameState.preGameState = {
                     isDealing: true,
-                    canCallMain: true
+                    canCallMain: true,
+                    commonMain: gameState.commonMain
                 };
                 io.to(roomId).emit('updateGameState', {
                     phase: 'pregame',
@@ -832,7 +875,10 @@ io.on('connection', (socket) => {
                     
                     io.to(roomId).emit('updateGameState', {
                         phase: 'pregame',
-                        preGameState: gameState.preGameState
+                        preGameState: {
+                            ...gameState.preGameState,
+                            commonMain: gameState.commonMain
+                        }
                     });
                     
                     io.to(roomId).emit('mainCalled', {
@@ -846,7 +892,10 @@ io.on('connection', (socket) => {
                 // 更新游戏状态
                 io.to(roomId).emit('updateGameState', {
                     phase: 'pregame',
-                    preGameState: gameState.preGameState
+                    preGameState: {
+                        ...gameState.preGameState,
+                        commonMain: gameState.commonMain
+                    }
                 });
                 
                 // 设置叫主截止时间（发牌结束后10秒）
@@ -856,7 +905,10 @@ io.on('connection', (socket) => {
                 // 通知客户端
                 io.to(roomId).emit('updateGameState', {
                     phase: 'pregame',
-                    preGameState: gameState.preGameState
+                    preGameState: {
+                        ...gameState.preGameState,
+                        commonMain: gameState.commonMain
+                    }
                 });
                 
                 return;
@@ -988,7 +1040,8 @@ io.on('connection', (socket) => {
             isMainFixed: false,
             mainCallDeadline: Date.now() + 100000,
             counterMainDeadline: null,
-            mainCalled: false
+            mainCalled: false,
+            commonMain: '2'  // 初始常主为2
         };
 
         // 预先准备机器人的牌（用于叫主）
@@ -1021,7 +1074,8 @@ io.on('connection', (socket) => {
                 console.log('First counter test card dealt, can start calling main');
                 gameState.preGameState = {
                     isDealing: true,
-                    canCallMain: true
+                    canCallMain: true,
+                    commonMain: gameState.commonMain
                 };
                 io.to(roomId).emit('updateGameState', {
                     phase: 'pregame',
@@ -1154,7 +1208,10 @@ io.on('connection', (socket) => {
                         // 通知所有玩家游戏状态已更新
                         io.to(roomId).emit('updateGameState', {
                             phase: 'pregame',
-                            preGameState: gameState.preGameState
+                            preGameState: {
+                                ...gameState.preGameState,
+                                commonMain: gameState.commonMain
+                            }
                         });
                     }
                 }, 2000); // 延迟2秒叫主
@@ -1246,7 +1303,8 @@ io.on('connection', (socket) => {
             isMainFixed: false,
             mainCallDeadline: Date.now() + 100000,
             counterMainDeadline: null,
-            mainCalled: false
+            mainCalled: false,
+            commonMain: '2'  // 初始常主为2
         };
 
         // 预先准备机器人的牌（用于叫主和加固）
@@ -1271,7 +1329,8 @@ io.on('connection', (socket) => {
                 console.log('First bot fix test card dealt, can start calling main');
                 gameState.preGameState = {
                     isDealing: true,
-                    canCallMain: true
+                    canCallMain: true,
+                    commonMain: gameState.commonMain
                 };
                 io.to(roomId).emit('updateGameState', {
                     phase: 'pregame',
@@ -1323,7 +1382,10 @@ io.on('connection', (socket) => {
                         // 通知所有玩家游戏状态已更新
                         io.to(roomId).emit('updateGameState', {
                             phase: 'pregame',
-                            preGameState: gameState.preGameState
+                            preGameState: {
+                                ...gameState.preGameState,
+                                commonMain: gameState.commonMain
+                            }
                         });
                     }
                 }, 2000); // 延迟2秒叫主
@@ -1342,7 +1404,10 @@ io.on('connection', (socket) => {
                     
                     io.to(roomId).emit('updateGameState', {
                         phase: 'pregame',
-                        preGameState: gameState.preGameState
+                        preGameState: {
+                            ...gameState.preGameState,
+                            commonMain: gameState.commonMain
+                        }
                     });
                     
                     io.to(roomId).emit('mainCalled', {
@@ -1371,7 +1436,10 @@ io.on('connection', (socket) => {
                             // 更新游戏状态
                             io.to(roomId).emit('updateGameState', {
                                 phase: 'pregame',
-                                preGameState: gameState.preGameState,
+                                preGameState: {
+                                    ...gameState.preGameState,
+                                    commonMain: gameState.commonMain
+                                },
                                 isMainFixed: gameState.isMainFixed
                             });
                         }

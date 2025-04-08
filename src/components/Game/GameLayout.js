@@ -58,33 +58,54 @@ function GameLayout() {
     // 添加新状态
     const [isMainCaller, setIsMainCaller] = useState(false);
 
+    // 添加常主状态
+    const [commonMain, setCommonMain] = useState('2');
+
     // 计算牌的权重（用于排序）
     const getCardWeight = useCallback((card) => {
+        // 大小王权重
         if (card.suit === 'JOKER') {
             return card.value === 'BIG' ? 10000 : 9999;
         }
-    
+
         const suitWeights = {
             'HEARTS': 400,
             'SPADES': 300,
             'DIAMONDS': 200,
             'CLUBS': 100
         };
-    
-        const mainValues = ['5', '3', '2'];
+
+        // 基础权重
+        let weight = suitWeights[card.suit];
+
+        // 如果是当前常主
+        if (card.value === preGameState.commonMain) {
+            return 9000 + weight;  // 放在大小王之后
+        }
+
+        // 常主牌的权重计算
+        const commonMainValues = ['5', '3', '2'];  // 固定常主
         const normalValues = ['4', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
         
-        let weight = suitWeights[card.suit];
+        // 固定常主的权重计算（5、3、2的顺序）
+        if (commonMainValues.includes(card.value)) {
+            const valueIndex = commonMainValues.indexOf(card.value);
+            const baseWeight = 9000 - valueIndex * 100; // 5是9000，3是8900，2是8800
+            
+            if (card.suit === mainSuit) {
+                return baseWeight; // 主花色的固定常主
+            } else {
+                return baseWeight - 50; // 副花色的固定常主
+            }
+        }
         
-        if (mainValues.includes(card.value)) {
-            weight += (mainValues.indexOf(card.value) === 0 ? 3000 : 
-                      mainValues.indexOf(card.value) === 1 ? 2000 : 1000);
-        } else {
+        // 普通牌
+        if (normalValues.includes(card.value)) {
             weight += normalValues.indexOf(card.value) * 10;
         }
-    
+
         return weight;
-    }, []);
+    }, [mainSuit, preGameState.commonMain]);
 
     // 排序牌
     const sortCards = useCallback((cards) => {
@@ -257,6 +278,11 @@ function GameLayout() {
                 setPreGameState(gameState.preGameState);
                 setIsDealing(gameState.preGameState.isDealing);
                 setCanCallMain(gameState.preGameState.canCallMain);
+                
+                // 添加常主更新
+                if (gameState.preGameState.commonMain) {
+                    setCommonMain(gameState.preGameState.commonMain);
+                }
                 
                 // 处理叫主截止时间
                 if (gameState.preGameState.callMainDeadline) {

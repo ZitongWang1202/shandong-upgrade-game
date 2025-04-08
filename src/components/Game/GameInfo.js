@@ -31,6 +31,16 @@ function GameInfo({ mainSuit, mainCaller, mainCards, gamePhase, preGameState, is
         >
             <Text fontWeight="bold" mb={2}>游戏信息</Text>
             
+            {/* 添加常主显示 */}
+            <Flex direction="column" gap={2}>
+                <Flex align="center" gap={2}>
+                    <Text>当前常主:</Text>
+                    <Badge colorScheme="purple">
+                        {preGameState.commonMain || '2'}
+                    </Badge>
+                </Flex>
+            </Flex>
+
             {mainCaller && (
                 <Flex direction="column" gap={2}>
                     {/* 显示叫主玩家信息 */}
