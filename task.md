@@ -3,8 +3,9 @@
 设置路由和页面结构
 实现用户认证系统
 
-shandong-upgrade-game
-npm run dev
+cd shandong-upgrade-game
+cd shandong-upgrade-game/server && npm run dev
+cd shandong-upgrade-game && npm start
 
 创建房间
 出现界面 玩法 局数 模式 
