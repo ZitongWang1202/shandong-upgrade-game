@@ -83,6 +83,12 @@ const LobbyPage = () => {
     socket.emit('createBotFixTestGame');
   };
 
+  // 创建粘牌测试游戏
+  const createStickTestGame = () => {
+    console.log('Creating stick test game');
+    socket.emit('createStickTestGame');
+  };
+
   return (
     <Container maxW="container.xl" py={8}>
       <VStack spacing={8} align="stretch">
@@ -110,6 +116,11 @@ const LobbyPage = () => {
             <Tooltip label="机器人加固测试：机器人叫主并加固，测试客户端反应" hasArrow>
               <Button colorScheme="orange" onClick={createBotFixTestGame}>
                 机器人加固
+              </Button>
+            </Tooltip>
+            <Tooltip label="粘牌测试：机器人叫主，玩家有小王和黑桃6677可以粘牌" hasArrow>
+              <Button colorScheme="teal" onClick={createStickTestGame}>
+                粘牌测试
               </Button>
             </Tooltip>
           </HStack>

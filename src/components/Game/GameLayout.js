@@ -9,7 +9,8 @@ import {
     MenuList,
     MenuItem,
     Text,
-    Progress
+    Progress,
+    VStack
 } from '@chakra-ui/react';
 import Card from './Card';
 import GameInfo from './GameInfo';
@@ -22,7 +23,11 @@ function GameLayout() {
     const [isDealing, setIsDealing] = useState(true);          // 是否在发牌中
     const [dealingProgress, setDealingProgress] = useState(0); // 发牌进度
     const [gamePhase, setGamePhase] = useState('pregame');     // 游戏阶段：'waiting'/'pregame'/'playing'/'aftergame'
-    const [preGameState, setPreGameState] = useState({ isDealing: false, canCallMain: false }); // pregame 阶段的子状态
+    const [preGameState, setPreGameState] = useState({ 
+        isDealing: false, 
+        canCallMain: false,
+        canStickMain: false,  // 添加是否可以粘主的状态
+    }); 
     
     // 游戏状态
     const [mainSuit, setMainSuit] = useState(null); // 当前主色
@@ -60,6 +65,47 @@ function GameLayout() {
 
     // 添加常主状态
     const [commonMain, setCommonMain] = useState('2');
+
+    // 添加新的状态
+    const [canStickCards, setCanStickCards] = useState(false);  // 是否可以粘牌
+    const [hasStickCards, setHasStickCards] = useState(false);  // 是否已经粘牌
+    const [isStickPhase, setIsStickPhase] = useState(false);    // 是否在粘牌阶段
+    const [mainCallerCards, setMainCallerCards] = useState(null); // 叫主玩家的牌
+    const [selectedStickCards, setSelectedStickCards] = useState({
+        commonMain: null,  // 选中的常主/固定常主
+        suitCards: []      // 选中的同花色牌
+    });
+
+    // 添加粘主倒计时状态
+    const [stickMainTimeLeft, setStickMainTimeLeft] = useState(null);
+
+    // 添加粘主截止时间状态
+    const [stickMainDeadline, setStickMainDeadline] = useState(null);
+
+    // 在状态部分添加新的状态
+    const [selectedCards, setSelectedCards] = useState([]);
+    const [maxSelectableCards, setMaxSelectableCards] = useState(0);
+    const [cardSelectionValidator, setCardSelectionValidator] = useState(null);
+
+    // 添加卡牌选择验证器
+    const validators = {
+        stickPhase: (card, currentSelected) => {
+            // 如果已经选了3张牌，不能再选
+            if (currentSelected.length >= 3) return false;
+            
+            // 如果还没有选牌，第一张必须是常主或固定常主
+            if (currentSelected.length === 0) {
+                return card.value === commonMain || ['2', '3', '5'].includes(card.value);
+            }
+            
+            // 如果已经选了一张牌，接下来两张必须是主花色的牌
+            return card.suit === mainSuit && currentSelected.length < 3;
+        },
+        gaming: (card, currentSelected) => {
+            // 出牌阶段的验证逻辑
+            return currentSelected.length < 3;
+        }
+    };
 
     // 计算牌的权重（用于排序）
     const getCardWeight = useCallback((card) => {
@@ -223,6 +269,166 @@ function GameLayout() {
         }
     };
 
+    // 添加检查是否可以粘牌的函数
+    const checkCanStickCards = useCallback(() => {
+        // 如果是叫主玩家或已经有人粘牌，则不能粘牌
+        if (mainCaller === socket.id || hasStickCards) {
+            setCanStickCards(false);
+            return;
+        }
+
+        // 检查是否有王
+        const hasJoker = playerCards.some(card => card.suit === 'JOKER');
+        if (!hasJoker) {
+            setCanStickCards(false);
+            return;
+        }
+
+        // 检查是否有连对
+        const suitPairs = {};
+        playerCards.forEach(card => {
+            if (card.suit !== 'JOKER') {
+                if (!suitPairs[card.suit]) {
+                    suitPairs[card.suit] = {};
+                }
+                suitPairs[card.suit][card.value] = (suitPairs[card.suit][card.value] || 0) + 1;
+            }
+        });
+
+        // 检查每个花色是否有连对
+        const hasConsecutivePair = Object.values(suitPairs).some(suitCards => {
+            const values = Object.entries(suitCards)
+                .filter(([_, count]) => count >= 2)
+                .map(([value]) => value);
+            
+            // 检查是否有相邻的值
+            for (let i = 0; i < values.length - 1; i++) {
+                const currentValue = values[i];
+                const nextValue = values[i + 1];
+                if (isConsecutive(currentValue, nextValue)) {
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        setCanStickCards(hasJoker && hasConsecutivePair);
+    }, [playerCards, mainCaller, hasStickCards]);
+
+    // 判断两个牌值是否相邻
+    const isConsecutive = (value1, value2) => {
+        const values = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+        const index1 = values.indexOf(value1);
+        const index2 = values.indexOf(value2);
+        return Math.abs(index1 - index2) === 1;
+    };
+
+    // 处理粘牌按钮点击
+    const handleStickCards = () => {
+        if (canStickCards) {
+            socket.emit('stickCards', {
+                roomId: localStorage.getItem('roomId')
+            });
+            setHasStickCards(true);
+        }
+    };
+
+    // 处理选择要交换的牌
+    const handleSelectStickCards = (card) => {
+        if (!isStickPhase || hasStickCards) return;
+
+        // 如果点击已选中的牌，则取消选择
+        if (selectedStickCards.commonMain && 
+            selectedStickCards.commonMain.suit === card.suit && 
+            selectedStickCards.commonMain.value === card.value) {
+            setSelectedStickCards(prev => ({
+                ...prev,
+                commonMain: null
+            }));
+            return;
+        }
+
+        if (selectedStickCards.suitCards.some(c => 
+            c.suit === card.suit && c.value === card.value)) {
+            setSelectedStickCards(prev => ({
+                ...prev,
+                suitCards: prev.suitCards.filter(c => 
+                    !(c.suit === card.suit && c.value === card.value))
+            }));
+            return;
+        }
+
+        // 如果是常主或固定常主
+        if (card.value === commonMain || ['2', '3', '5'].includes(card.value)) {
+            setSelectedStickCards(prev => ({
+                ...prev,
+                commonMain: card
+            }));
+        }
+        // 如果是主花色的牌且还没选够两张
+        else if (card.suit === mainSuit && selectedStickCards.suitCards.length < 2) {
+            setSelectedStickCards(prev => ({
+                ...prev,
+                suitCards: [...prev.suitCards, card]
+            }));
+        }
+    };
+
+    // 通用的卡牌选择处理函数
+    const handleCardSelect = (card) => {
+        if (!cardSelectionValidator) return;
+
+        const isCardSelected = selectedCards.some(
+            c => c.suit === card.suit && c.value === card.value
+        );
+
+        if (isCardSelected) {
+            // 取消选择
+            setSelectedCards(prev => 
+                prev.filter(c => !(c.suit === card.suit && c.value === card.value))
+            );
+        } else {
+            // 验证是否可以选择
+            if (cardSelectionValidator(card, selectedCards)) {
+                setSelectedCards(prev => [...prev, card]);
+            }
+        }
+    };
+
+    // 修改进入粘牌阶段的逻辑
+    useEffect(() => {
+        if (gamePhase === 'stickPhase') {
+            setMaxSelectableCards(3);
+            setCardSelectionValidator(() => validators.stickPhase);
+        } else if (gamePhase === 'gaming') {
+            setMaxSelectableCards(3);
+            setCardSelectionValidator(() => validators.gaming);
+        } else {
+            setMaxSelectableCards(0);
+            setCardSelectionValidator(null);
+        }
+    }, [gamePhase, mainSuit, commonMain]);
+
+    // 修改确认交换的处理函数
+    const handleConfirmStickCards = () => {
+        if (selectedCards.length === 3) {
+            const commonMainCard = selectedCards[0];
+            const suitCards = selectedCards.slice(1);
+            
+            socket.emit('confirmStickCards', {
+                roomId: localStorage.getItem('roomId'),
+                cards: {
+                    commonMain: commonMainCard,
+                    suitCards: suitCards
+                }
+            });
+
+            // 清理相关状态
+            setStickMainTimeLeft(null);
+            setCanStickCards(false);
+        }
+    };
+
     // 将监听器设置分离为专门的useEffect，不依赖频繁变化的状态
     useEffect(() => {
         console.log('设置 socket 监听器');
@@ -272,6 +478,10 @@ function GameLayout() {
             console.log('游戏状态更新:', gameState);
             if (gameState.phase) {
                 setGamePhase(gameState.phase);
+                // 如果进入粘牌阶段，设置相关状态
+                if (gameState.phase === 'stickPhase') {
+                    setIsStickPhase(true);
+                }
             }
             
             if (gameState.preGameState) {
@@ -292,6 +502,16 @@ function GameLayout() {
                 // 处理反主截止时间
                 if (gameState.preGameState.stealMainDeadline) {
                     setStealMainDeadline(gameState.preGameState.stealMainDeadline);
+                }
+
+                // 处理粘牌状态
+                if (gameState.preGameState.canStickMain !== undefined) {
+                    setCanStickCards(gameState.preGameState.canStickMain);
+                }
+                
+                // 处理粘牌截止时间
+                if (gameState.preGameState.stickMainDeadline) {
+                    setStickMainDeadline(gameState.preGameState.stickMainDeadline);
                 }
             }
             
@@ -367,6 +587,49 @@ function GameLayout() {
             }));
         });
 
+        // 添加粘牌事件监听
+        socket.on('playerStickCards', ({ playerId, mainCallerCards }) => {
+            console.log('收到粘牌信息:', { playerId, mainCallerCards });
+            // 设置叫主玩家的牌
+            setMainCallerCards([
+                { suit: 'JOKER', value: mainCallerCards.joker },
+                { suit: mainCallerCards.pair.suit, value: mainCallerCards.pair.value },
+                { suit: mainCallerCards.pair.suit, value: mainCallerCards.pair.value }
+            ]);
+        });
+
+        // 添加交换完成的监听
+        socket.on('cardsExchanged', ({ mainPlayer, stickPlayer }) => {
+            console.log('Cards exchanged:', { mainPlayer, stickPlayer });
+            // 清除所有相关状态
+            setSelectedCards([]);
+            setHasStickCards(false);
+            setCanStickCards(false);
+            setIsStickPhase(false);
+            setStickMainTimeLeft(null);
+            setStickMainDeadline(null);
+            setMainCallerCards(null);
+            // 清除反主相关状态
+            setShowCounterButton(false);
+            setCanCounterMain(false);
+            setStealMainTimeLeft(null);
+            setStealMainDeadline(null);
+            setCounterJoker(null);
+            setCounterPair(null);
+        });
+
+        // 添加交换错误的监听
+        socket.on('exchangeError', ({ message }) => {
+            console.log('Exchange error:', message);
+            // 这里可以添加错误提示
+        });
+
+        // 添加手牌更新监听
+        socket.on('updatePlayerCards', (cards) => {
+            console.log('Received updated cards:', cards);
+            setPlayerCards(sortCards(cards));
+        });
+
         return () => {
             console.log('清理 socket 监听器');
             socket.off('gameStart');
@@ -376,6 +639,10 @@ function GameLayout() {
             socket.off('mainCalled');
             socket.off('mainFixed');
             socket.off('mainCountered');
+            socket.off('playerStickCards');
+            socket.off('cardsExchanged');
+            socket.off('exchangeError');
+            socket.off('updatePlayerCards');
         };
     }, [sortCards]); // 只依赖sortCards，因为它是稳定的callback函数
 
@@ -428,6 +695,30 @@ function GameLayout() {
             return () => clearInterval(intervalId);
         }
     }, [stealMainDeadline, hasCounteredMain]);
+
+    // 粘主倒计时
+    useEffect(() => {
+        if (stickMainDeadline && !hasStickCards) {  // 添加 !hasStickCards 条件
+            const intervalId = setInterval(() => {
+                const now = Date.now();
+                const timeLeft = Math.max(0, Math.floor((stickMainDeadline - now) / 1000));
+                setStickMainTimeLeft(timeLeft);
+                
+                if (timeLeft <= 0) {
+                    clearInterval(intervalId);
+                    setCanStickCards(false);
+                    setStickMainTimeLeft(null);  // 清除倒计时显示
+                }
+            }, 1000);
+            
+            return () => {
+                clearInterval(intervalId);
+                if (hasStickCards) {
+                    setStickMainTimeLeft(null);  // 当确认粘主后清除倒计时
+                }
+            };
+        }
+    }, [stickMainDeadline, hasStickCards]);
 
     // 渲染界面
     return (
@@ -521,7 +812,12 @@ function GameLayout() {
                 )}
 
                 {/* 已叫主状态下 - 其他玩家的反主界面 */}
-                {mainCalled && mainCaller !== socket.id && !hasCounteredMain && showCounterButton && (
+                {mainCalled && 
+                 mainCaller !== socket.id && 
+                 !hasCounteredMain && 
+                 showCounterButton && 
+                 !isStickPhase && 
+                 gamePhase === 'pregame' && (  // 添加游戏阶段的判断
                     <HStack spacing={4}>
                         {/* 大小王选择和花色对子选择 - 仅在可反主时显示 */}
                         {preGameState.canStealMain && !hasCounteredMain && (
@@ -573,7 +869,7 @@ function GameLayout() {
                             </>
                         )}
 
-                        {/* 反主按钮 - 总是显示，但状态不同 */}
+                        {/* 反主按钮 */}
                         <HStack>
                             <Button
                                 colorScheme={hasCounteredMain ? "gray" : "red"}
@@ -592,7 +888,7 @@ function GameLayout() {
                 )}
 
                 {/* 已反主后的状态显示 */}
-                {hasCounteredMain && (
+                {hasCounteredMain && !isStickPhase && (
                     <Button
                         colorScheme="gray"
                         isDisabled={true}
@@ -602,7 +898,7 @@ function GameLayout() {
                 )}
 
                 {/* 已叫主状态下 - 叫主玩家的加固按钮 */}
-                {mainCalled && (mainCaller === socket.id || isMainCaller) && !hasCounteredMain && (
+                {mainCalled && (mainCaller === socket.id || isMainCaller) && !hasCounteredMain && !isStickPhase && (
                     <HStack>
                         <Button
                             colorScheme={isMainFixed ? "gray" : "green"}
@@ -631,24 +927,109 @@ function GameLayout() {
                 overflow="visible"
             >
                 <div className="player-hand">
-                    {playerCards.map((card, index) => (
-                        <div 
-                            key={`${card.suit}-${card.value}-${index}`} 
-                            style={{
-                                position: 'relative',
-                                display: 'inline-block',
-                                marginRight: '-30px',
-                            }}
-                        >
-                            <Card 
-                                suit={card.suit}
-                                value={card.value}
-                                className="player-card"
-                            />
-                        </div>
-                    ))}
+                    {playerCards.map((card, index) => {
+                        const isSelected = selectedCards.some(
+                            c => c.suit === card.suit && c.value === card.value
+                        );
+                        
+                        const canSelect = cardSelectionValidator?.(card, selectedCards);
+                        
+                        return (
+                            <div 
+                                key={`${card.suit}-${card.value}-${index}`} 
+                                className={`card-container ${isSelected ? 'selected' : ''} ${!canSelect ? 'disabled' : ''}`}
+                                onClick={() => handleCardSelect(card)}
+                            >
+                                <Card 
+                                    suit={card.suit}
+                                    value={card.value}
+                                    className="player-card"
+                                />
+                            </div>
+                        );
+                    })}
                 </div>
             </Center>
+
+            {/* 粘牌按钮 */}
+            {isStickPhase && 
+             preGameState.canStickMain && 
+             mainCaller !== socket.id && 
+             !hasStickCards && 
+             gamePhase === 'stickPhase' && (  // 添加这个条件
+                <HStack position="absolute" top="60%" left="50%" transform="translate(-50%, -50%)">
+                    <Button
+                        colorScheme="blue"
+                        onClick={handleStickCards}
+                        isDisabled={!canStickCards}
+                    >
+                        粘主
+                    </Button>
+                    {stickMainTimeLeft !== null && !hasStickCards && (
+                        <Text ml={2} color={stickMainTimeLeft <= 3 ? "red.500" : "gray.500"}>
+                            {stickMainTimeLeft}秒
+                        </Text>
+                    )}
+                </HStack>
+            )}
+
+            {/* 显示叫主玩家的牌和选择要交换的牌 */}
+            {isStickPhase && hasStickCards && (
+                <Box 
+                    position="absolute" 
+                    top="50%" 
+                    left="50%" 
+                    transform="translate(-50%, -50%)"
+                    bg="white"
+                    p={4}
+                    borderRadius="md"
+                    boxShadow="lg"
+                    zIndex={10}
+                >
+                    {/* 显示叫主玩家的牌 */}
+                    {mainCallerCards && (
+                        <Box mb={4}>
+                            <Text fontWeight="bold" mb={2}>叫主玩家的牌：</Text>
+                            <HStack spacing={2}>
+                                {mainCallerCards.map((card, index) => (
+                                    <Card 
+                                        key={index}
+                                        suit={card.suit}
+                                        value={card.value}
+                                    />
+                                ))}
+                            </HStack>
+                        </Box>
+                    )}
+
+                    {/* 选择要交换的牌 */}
+                    <Box>
+                        <Text fontWeight="bold" mb={2}>选择要交换的牌：</Text>
+                        <VStack align="start" spacing={2} mb={4}>
+                            <HStack>
+                                <Text>1. 先选择一张<strong>常主</strong>或<strong>固定常主</strong>(2/3/5)</Text>
+                                {selectedCards.length > 0 && (
+                                    <Text color="green.500" ml={2}>✓</Text>
+                                )}
+                            </HStack>
+                            <HStack>
+                                <Text>2. 再选择两张<strong>主花色</strong>的牌</Text>
+                                {selectedCards.length === 3 && (
+                                    <Text color="green.500" ml={2}>✓</Text>
+                                )}
+                            </HStack>
+                        </VStack>
+                        <Button
+                            colorScheme="green"
+                            onClick={handleConfirmStickCards}
+                            isDisabled={selectedCards.length !== 3}
+                            width="100%"
+                        >
+                            确认交换
+                        </Button>
+                    </Box>
+                </Box>
+            )}
         </Box>
     );
 }

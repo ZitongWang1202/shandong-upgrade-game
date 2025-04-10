@@ -18,8 +18,8 @@
     height: var(--card-height);
     width: var(--card-width);
     object-fit: contain;
-    margin: 0 0.5rem;
     cursor: pointer;
+    transition: transform 0.3s ease;
 }
 
 .player-card-back {
@@ -47,19 +47,53 @@
     margin: 1rem;
 }
 
-/* 玩家手牌区域的悬浮效果 */
+/* 玩家手牌区域的基础样式 */
 .player-hand {
     display: flex;
-    margin-left: calc(var(--card-overlap) * -1);
+    align-items: flex-end;
+    position: relative;
+    padding: 20px 0; /* 为悬浮效果预留空间 */
 }
 
-.player-hand > * {
-    margin-left: calc(-1 * var(--card-overlap));
+/* 卡牌容器基础样式 */
+.card-container {
+    position: relative;
+    margin-left: -30px; /* 控制牌的重叠程度 */
+    transition: transform 0.3s ease;
+    cursor: pointer;
 }
 
-.player-hand > *:hover {
+/* 第一张牌不需要负边距 */
+.card-container:first-child {
+    margin-left: 0;
+}
+
+/* 悬浮效果 */
+.card-container:hover {
     transform: translateY(-20px);
-    z-index: 1;
+}
+
+/* 选中效果 */
+.card-container.selected {
+    transform: translateY(-30px);
+}
+
+/* 禁用状态 */
+.card-container.disabled {
+    cursor: not-allowed;
+}
+
+/* 确保卡牌自然叠放 */
+.card-container:not(:first-child) {
+    margin-left: -30px;
+}
+
+/* 玩家手牌样式 */
+.player-card {
+    height: var(--card-height);
+    width: var(--card-width);
+    object-fit: contain;
+    display: block;
 }
 
 /* 响应式调整 */

@@ -86,6 +86,23 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
                 mainCards: gameState.mainCards,
                 stealMainDeadline: stealMainDeadline
             });
+
+            // 10秒后无论是否有人加固或反主，都进入粘牌阶段
+            setTimeout(() => {
+                console.log('Entering stick phase');
+                gameState.phase = 'stickPhase';
+                gameState.preGameState = {
+                    ...gameState.preGameState,
+                    canStealMain: false,
+                    canStickMain: true,
+                    stickMainDeadline: Date.now() + 10000  // 给10秒粘牌时间
+                };
+                
+                io.to(roomId).emit('updateGameState', {
+                    phase: 'stickPhase',
+                    preGameState: gameState.preGameState
+                });
+            }, 10000);
         } else {
             // 如果没有人叫主，设置叫主截止时间（发牌结束后10秒）
             const callMainDeadline = Date.now() + 10000; // 10秒
@@ -99,7 +116,7 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
                 }
             });
             
-            // 发牌结束后10秒内没有人叫主，自动进入下一阶段
+            // 发牌结束后10秒内没有人叫主，准备开始新的一局
             setTimeout(() => {
                 if (!gameState.mainCalled) {
                     console.log('No one called main within time limit');
@@ -111,11 +128,11 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
                             commonMain: gameState.commonMain
                         }
                     });
-                    // 这里可以添加进入下一阶段的逻辑
+                    // TODO: 这里添加开始新一局的逻辑
+                    console.log('Should start a new round here');
                 }
             }, 10000);
         }
-        
         return;
     }
 
@@ -264,15 +281,16 @@ io.on('connection', (socket) => {
                 phase: 'pregame',           // 游戏阶段
                 preGameState: {            // pregame 阶段的子状态
                     isDealing: true,       // 是否在发牌
-                    canCallMain: true      // 是否可以叫主
+                    canCallMain: true,      // 是否可以叫主
+                    canStickMain: false,    // 初始设置为false
+                    commonMain: '2'         // 初始常主为2
                 },
                 currentRound: [],
                 bottomCards: [],
                 isMainFixed: false,
                 mainCallDeadline: Date.now() + 100000, // 给100秒的叫主时间
                 counterMainDeadline: null,
-                mainCalled: false,
-                commonMain: '2'  // 初始常主为2
+                mainCalled: false
             };
 
             // 预先分配好牌
@@ -349,7 +367,6 @@ io.on('connection', (socket) => {
                     mainSuit,
                     mainCaller: socket.id,
                     mainCards
-                    // 不包含stealMainDeadline
                 });
             } else {
                 // 如果在发牌结束后叫主，则在叫主后10秒内可以加固和反主
@@ -363,18 +380,36 @@ io.on('connection', (socket) => {
                     mainCards,
                     stealMainDeadline
                 });
+
+                // 10秒后无论是否有人加固或反主，都进入粘牌阶段
+                setTimeout(() => {
+                    if (!gameState.isMainFixed) {  // 如果没有加固
+                        console.log('Entering stick phase');
+                        gameState.phase = 'stickPhase';
+                        gameState.preGameState = {
+                            ...gameState.preGameState,
+                            canStealMain: false,
+                            canStickMain: true,
+                            stickMainDeadline: Date.now() + 10000
+                        };
+                        
+                        io.to(roomId).emit('updateGameState', {
+                            phase: 'stickPhase',
+                            preGameState: gameState.preGameState
+                        });
+                    }
+                }, 10000);
             }
             
             // 更新 preGameState
             gameState.preGameState = {
                 ...gameState.preGameState,
-                canCallMain: false,      // 不能再直接叫主
-                canStealMain: true,      // 可以反主
-                stealMainDeadline,        // 反主截止时间（可能为undefined）
+                canCallMain: false,
+                canStealMain: true,
+                stealMainDeadline,
                 commonMain: gameState.commonMain
             };
             
-            // 通知所有玩家游戏状态已更新
             io.to(roomId).emit('updateGameState', {
                 phase: 'pregame',
                 preGameState: {
@@ -382,24 +417,6 @@ io.on('connection', (socket) => {
                     commonMain: gameState.commonMain
                 }
             });
-
-            // 如果在发牌结束后叫主，则设置10秒后结束反主阶段
-            if (!gameState.preGameState.isDealing && stealMainDeadline) {
-                setTimeout(() => {
-                    if (gameState.preGameState.canStealMain && !gameState.isMainFixed) {
-                        console.log('Steal main time expired');
-                        gameState.preGameState.canStealMain = false;
-                        io.to(roomId).emit('updateGameState', {
-                            phase: 'pregame',
-                            preGameState: {
-                                ...gameState.preGameState,
-                                commonMain: gameState.commonMain
-                            }
-                        });
-                        // 这里可以添加进入下一阶段的逻辑
-                    }
-                }, 10000);
-            }
         }
     });
 
@@ -472,20 +489,148 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 粘主
-    socket.on('stickCards', ({ roomId, cards }) => {
+    // 处理粘牌请求
+    socket.on('stickCards', ({ roomId }) => {
         const gameState = games.get(roomId);
-        if (gameState && gameState.phase === 'stealMain') {
-            // 验证粘主的合法性
-            // ...
+        if (gameState && gameState.phase === 'stickPhase') {
+            const player = gameState.players.find(p => p.id === socket.id);
+            if (player) {
+                // 设置该玩家为粘牌玩家
+                gameState.stickPlayer = socket.id;
+                
+                // 只给粘牌玩家发送叫主玩家的牌信息
+                socket.emit('playerStickCards', {
+                    playerId: socket.id,
+                    mainCallerCards: {
+                        joker: gameState.mainCards?.joker,
+                        pair: gameState.mainCards?.pair
+                    }
+                });
 
-            // 通知所有玩家
-            io.to(roomId).emit('cardsStuck', {
-                playerId: socket.id,
-                cards
+                // 给其他玩家只发送有人粘主的消息
+                socket.broadcast.to(roomId).emit('playerStickCards', {
+                    playerId: socket.id,
+                    // 不包含 mainCallerCards
+                });
+            }
+        }
+    });
+
+    // 处理确认交换
+    socket.on('confirmStickCards', ({ roomId, cards }) => {
+        console.log('Received confirmStickCards:', { roomId, cards });
+
+        const gameState = games.get(roomId);
+        if (!gameState) {
+            console.log('Game state not found');
+            return;
+        }
+
+        if (gameState.stickPlayer !== socket.id) {
+            console.log('Not stick player');
+            return;
+        }
+
+        // 执行牌的交换
+        const mainPlayer = gameState.players.find(p => p.id === gameState.mainCaller);
+        const stickPlayer = gameState.players.find(p => p.id === socket.id);
+        
+        if (!mainPlayer || !stickPlayer || !gameState.mainCards) {
+            console.log('Players or mainCards not found');
+            return;
+        }
+
+        // 执行交换
+        const exchangeSuccess = exchangeCards(mainPlayer, stickPlayer, cards, gameState);
+        console.log('Exchange result:', exchangeSuccess);
+        
+        if (exchangeSuccess) {
+            // 清除粘牌相关状态
+            gameState.stickPlayer = null;
+            gameState.preGameState = {
+                ...gameState.preGameState,
+                canStickMain: false,
+                stickMainDeadline: null,
+                canStealMain: false,  // 清除反主状态
+                stealMainDeadline: null  // 清除反主截止时间
+            };
+            
+            // 通知玩家交换完成
+            io.to(roomId).emit('cardsExchanged', {
+                mainPlayer: gameState.mainCaller,
+                stickPlayer: socket.id
+            });
+            
+            // 进入游戏阶段
+            gameState.phase = 'playing';
+            io.to(roomId).emit('updateGameState', {
+                phase: 'playing',
+                preGameState: {
+                    ...gameState.preGameState,
+                    canStickMain: false,
+                    stickMainDeadline: null,
+                    canStealMain: false,
+                    stealMainDeadline: null
+                }
+            });
+
+            // 更新玩家手牌
+            io.to(mainPlayer.id).emit('updatePlayerCards', mainPlayer.cards);
+            io.to(stickPlayer.id).emit('updatePlayerCards', stickPlayer.cards);
+        } else {
+            // 交换失败通知
+            socket.emit('exchangeError', {
+                message: '选择的牌不符合规则'
             });
         }
     });
+
+    // 辅助函数：交换牌
+    function exchangeCards(mainPlayer, stickPlayer, stickCards, gameState) {
+        // 验证交换的牌是否合法
+        const isValidExchange = 
+            // 验证常主牌
+            (stickCards.commonMain.value === gameState.commonMain || 
+             ['2', '3', '5'].includes(stickCards.commonMain.value)) &&
+            // 验证主花色牌
+            stickCards.suitCards.length === 2 &&
+            stickCards.suitCards.every(card => card.suit === gameState.mainSuit);
+
+        if (!isValidExchange) {
+            return false;
+        }
+
+        // 从主叫玩家的牌中移除用于叫主的牌
+        mainPlayer.cards = mainPlayer.cards.filter(card => {
+            const mainJoker = gameState.mainCards?.joker;
+            const mainPair = gameState.mainCards?.pair;
+            
+            return !(
+                (card.suit === 'JOKER' && card.value === mainJoker) ||
+                (mainPair && card.suit === mainPair.suit && card.value === mainPair.value)
+            );
+        });
+        
+        // 从粘牌玩家的牌中移除选择的牌
+        stickPlayer.cards = stickPlayer.cards.filter(card => 
+            !(card.suit === stickCards.commonMain.suit && card.value === stickCards.commonMain.value) &&
+            !stickCards.suitCards.some(sc => sc.suit === card.suit && sc.value === card.value)
+        );
+        
+        // 添加交换的牌
+        mainPlayer.cards.push(stickCards.commonMain, ...stickCards.suitCards);
+        
+        // 添加主叫玩家的牌给粘牌玩家
+        if (gameState.mainCards) {
+            stickPlayer.cards.push(
+                { suit: 'JOKER', value: gameState.mainCards.joker },
+                { suit: gameState.mainCards.pair.suit, value: gameState.mainCards.pair.value },
+                { suit: gameState.mainCards.pair.suit, value: gameState.mainCards.pair.value }
+            );
+        }
+
+        return true;
+    }
 
     // 离开房间
     socket.on('leaveRoom', (roomId) => {
@@ -1417,33 +1562,24 @@ io.on('connection', (socket) => {
                         stealMainDeadline: stealMainDeadline
                     });
 
-                    // 延迟5秒后机器人加固
+                    // 在反主时限结束后进入粘牌阶段
                     setTimeout(() => {
-                        if (gameState.mainCaller === gameState.players[1].id && 
-                            gameState.preGameState.canStealMain) {
-                            console.log('Bot is fixing main');
+                        if (!gameState.isMainFixed) {  // 如果没有加固
+                            console.log('Entering stick phase');
+                            gameState.phase = 'stickPhase';
+                            gameState.preGameState = {
+                                ...gameState.preGameState,
+                                canStealMain: false,
+                                canStickMain: true,
+                                stickMainDeadline: Date.now() + 10000  // 给10秒粘牌时间
+                            };
                             
-                            // 加固成功
-                            gameState.preGameState.canStealMain = false;  // 不能再反主
-                            gameState.isMainFixed = true;  // 设置主已加固的标志
-                            
-                            // 通知所有玩家主已加固
-                            io.to(roomId).emit('mainFixed', {
-                                mainCaller: gameState.mainCaller,
-                                isMainFixed: true
-                            });
-                            
-                            // 更新游戏状态
                             io.to(roomId).emit('updateGameState', {
-                                phase: 'pregame',
-                                preGameState: {
-                                    ...gameState.preGameState,
-                                    commonMain: gameState.commonMain
-                                },
-                                isMainFixed: gameState.isMainFixed
+                                phase: 'stickPhase',
+                                preGameState: gameState.preGameState
                             });
                         }
-                    }, 5000); // 延迟5秒加固
+                    }, 10000);  // 反主时限结束后
                 }
                 
                 // 更新游戏状态
@@ -1519,6 +1655,259 @@ io.on('connection', (socket) => {
             // 使用新的发牌函数
             setTimeout(() => {
                 dealBotFixTestCards(0);
+            }, 1000);
+        }, 2000);
+    });
+
+    // 创建粘牌测试游戏
+    socket.on('createStickTestGame', () => {
+        console.log('Creating stick test game...');
+        const roomId = Math.random().toString(36).slice(2, 8);
+        
+        // 添加真实玩家（当前连接的用户）
+        const players = [{
+            id: socket.id,
+            ready: true,
+            name: `玩家${socket.id.slice(0, 4)}`
+        }];
+        
+        // 添加3个机器人玩家
+        for (let i = 1; i <= 3; i++) {
+            const botId = `bot-${i}-${Math.random().toString(36).slice(2, 6)}`;
+            players.push({
+                id: botId,
+                ready: true,
+                name: `机器人${i}`,
+                isBot: true
+            });
+        }
+        
+        // 创建房间和游戏状态
+        const room = { id: roomId, players: players };
+        const deck = shuffleDeck(createDeck());
+        const gameState = {
+            deck: deck,
+            players: players.map(p => ({
+                ...p,
+                cards: [],
+                isDealer: false
+            })),
+            currentTurn: null,
+            mainSuit: null,
+            mainCaller: null,
+            mainCards: null,
+            phase: 'pregame',
+            preGameState: {
+                isDealing: true,
+                canCallMain: true,
+                canStickMain: false,  // 初始设置为false
+                commonMain: '2'
+            },
+            currentRound: [],
+            bottomCards: [],
+            isMainFixed: false,
+            mainCallDeadline: Date.now() + 100000,
+            counterMainDeadline: null,
+            mainCalled: false,
+            commonMain: '2'
+        };
+
+        // 预先准备机器人的牌（用于叫主）
+        const botCards = [
+            { suit: 'JOKER', value: 'BIG' },  // 大王
+            { suit: 'HEARTS', value: 'A' },    // 红桃A
+            { suit: 'HEARTS', value: 'A' }     // 红桃A
+        ];
+        
+        // 预先准备玩家的牌（用于粘牌）
+        const playerCards = [
+            { suit: 'JOKER', value: 'SMALL' },  // 小王
+            { suit: 'HEARTS', value: '3' },     // 红桃3
+            { suit: 'HEARTS', value: '6' },     // 红桃6
+            { suit: 'HEARTS', value: '7' },     // 红桃7
+            { suit: 'SPADES', value: '6' },     // 黑桃6
+            { suit: 'SPADES', value: '6' },     // 黑桃6
+            { suit: 'SPADES', value: '7' },     // 黑桃7
+            { suit: 'SPADES', value: '7' }      // 黑桃7
+        ];
+        
+        // 从牌堆中移除这些已经分配的牌
+        const remainingDeck = deck.filter(card => 
+            !(botCards.some(bc => bc.suit === card.suit && bc.value === card.value)) &&
+            !(playerCards.some(pc => pc.suit === card.suit && pc.value === card.value))
+        );
+
+        function dealStickTestCards(currentRound = 0) {
+            const totalRounds = 26;
+            console.log(`Dealing stick test round ${currentRound + 1}/${totalRounds}`);
+
+            // 第一张牌时，设置初始状态
+            if (currentRound === 0) {
+                console.log('First stick test card dealt, can start calling main');
+                gameState.preGameState = {
+                    isDealing: true,
+                    canCallMain: true,
+                    commonMain: gameState.commonMain
+                };
+                io.to(roomId).emit('updateGameState', {
+                    phase: 'pregame',
+                    preGameState: gameState.preGameState
+                });
+            }
+
+            // 在发第三张牌后，让机器人叫主
+            if (currentRound === 2) {
+                setTimeout(() => {
+                    const botId = gameState.players[1].id;
+                    if (gameState && gameState.preGameState.canCallMain && !gameState.mainCalled) {
+                        console.log('Bot is calling main');
+                        
+                        gameState.mainSuit = 'HEARTS';
+                        gameState.mainCaller = botId;
+                        gameState.mainCards = {
+                            joker: 'BIG',
+                            pair: { suit: 'HEARTS', value: 'A' }
+                        };
+                        gameState.mainCalled = true;
+                        
+                        if (gameState.preGameState.isDealing) {
+                            gameState.preGameState.stealMainDelayed = true;
+                            
+                            io.to(roomId).emit('mainCalled', {
+                                mainSuit: 'HEARTS',
+                                mainCaller: botId,
+                                mainCards: {
+                                    joker: 'BIG',
+                                    pair: { suit: 'HEARTS', value: 'A' }
+                                }
+                            });
+                        }
+                        
+                        gameState.preGameState = {
+                            ...gameState.preGameState,
+                            canCallMain: false,
+                            canStealMain: true
+                        };
+                        
+                        io.to(roomId).emit('updateGameState', {
+                            phase: 'pregame',
+                            preGameState: {
+                                ...gameState.preGameState,
+                                commonMain: gameState.commonMain
+                            }
+                        });
+                    }
+                }, 2000);
+            }
+
+            if (currentRound >= totalRounds) {
+                console.log('All cards dealt');
+                gameState.preGameState.isDealing = false;
+                
+                if (gameState.mainCalled && gameState.preGameState.stealMainDelayed) {
+                    console.log('Setting steal main deadline after dealing completed');
+                    const stealMainDeadline = Date.now() + 10000;
+                    gameState.preGameState.stealMainDeadline = stealMainDeadline;
+                    gameState.preGameState.stealMainDelayed = false;
+                    
+                    io.to(roomId).emit('updateGameState', {
+                        phase: 'pregame',
+                        preGameState: {
+                            ...gameState.preGameState,
+                            commonMain: gameState.commonMain
+                        }
+                    });
+                    
+                    io.to(roomId).emit('mainCalled', {
+                        mainSuit: gameState.mainSuit,
+                        mainCaller: gameState.mainCaller,
+                        mainCards: gameState.mainCards,
+                        stealMainDeadline: stealMainDeadline
+                    });
+
+                    // 在反主时限结束后进入粘牌阶段
+                    setTimeout(() => {
+                        if (!gameState.isMainFixed) {  // 如果没有加固
+                            console.log('Entering stick phase');
+                            gameState.phase = 'stickPhase';
+                            gameState.preGameState = {
+                                ...gameState.preGameState,
+                                canStealMain: false,
+                                canStickMain: true,
+                                stickMainDeadline: Date.now() + 10000  // 给10秒粘牌时间
+                            };
+                            
+                            io.to(roomId).emit('updateGameState', {
+                                phase: 'stickPhase',
+                                preGameState: gameState.preGameState
+                            });
+                        }
+                    }, 10000);  // 反主时限结束后
+                }
+                
+                return;
+            }
+
+            // 给真实玩家发牌
+            if (currentRound < playerCards.length) {
+                io.to(socket.id).emit('receiveCard', {
+                    card: playerCards[currentRound],
+                    cardIndex: currentRound,
+                    totalCards: totalRounds
+                });
+                gameState.players[0].cards[currentRound] = playerCards[currentRound];
+            } else {
+                const card = remainingDeck.pop();
+                io.to(socket.id).emit('receiveCard', {
+                    card,
+                    cardIndex: currentRound,
+                    totalCards: totalRounds
+                });
+                gameState.players[0].cards[currentRound] = card;
+            }
+
+            // 给机器人发牌
+            for (let i = 1; i < 4; i++) {
+                if (i === 1 && currentRound < botCards.length) {
+                    gameState.players[i].cards[currentRound] = botCards[currentRound];
+                } else {
+                    const card = remainingDeck.pop();
+                    gameState.players[i].cards[currentRound] = card;
+                }
+            }
+
+            // 广播发牌进度
+            io.to(roomId).emit('dealingProgress', {
+                currentRound: currentRound + 1,
+                totalRounds
+            });
+
+            // 继续下一轮发牌
+            setTimeout(() => {
+                dealStickTestCards(currentRound + 1);
+            }, 1000);
+        }
+
+        // 存储游戏状态和房间信息
+        games.set(roomId, gameState);
+        rooms.set(roomId, room);
+        
+        socket.join(roomId);
+        socket.emit('joinRoomSuccess', roomId);
+        io.to(roomId).emit('roomInfo', room);
+        
+        socket.emit('testGameCreated', { 
+            roomId,
+            message: '粘牌测试：机器人将用大王和红桃A对叫主，您将收到小王、红桃3、红桃6、红桃7和黑桃6677用于粘牌'
+        });
+        
+        // 开始游戏
+        setTimeout(() => {
+            console.log('Starting stick test game...');
+            io.to(roomId).emit('gameStart');
+            
+            setTimeout(() => {
+                dealStickTestCards(0);
             }, 1000);
         }, 2000);
     });
