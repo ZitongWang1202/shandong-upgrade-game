@@ -89,6 +89,12 @@ const LobbyPage = () => {
     socket.emit('createStickTestGame');
   };
 
+  // 删除 handleStartTest 函数，添加新的 createBottomTestGame 函数
+  const createBottomTestGame = () => {
+    console.log('Creating bottom test game');
+    socket.emit('createBottomTestGame');
+  };
+
   return (
     <Container maxW="container.xl" py={8}>
       <VStack spacing={8} align="stretch">
@@ -121,6 +127,14 @@ const LobbyPage = () => {
             <Tooltip label="粘牌测试：机器人叫主，玩家有小王和黑桃6677可以粘牌" hasArrow>
               <Button colorScheme="teal" onClick={createStickTestGame}>
                 粘牌测试
+              </Button>
+            </Tooltip>
+            <Tooltip label="抠底测试：对家叫主后进入抠底阶段" hasArrow>
+              <Button
+                colorScheme="teal"
+                onClick={createBottomTestGame}
+              >
+                抠底测试
               </Button>
             </Tooltip>
           </HStack>

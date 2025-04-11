@@ -160,6 +160,29 @@ function dealNextRound(gameState, roomId, currentRound = 0) {
     }, 2000);
 }
 
+// 添加判断玩家所属队伍的函数
+function getPlayerTeam(playerId, players) {
+    const playerIndex = players.findIndex(p => p.id === playerId);
+    // 1、3号玩家是第1队，2、4号玩家是第2队
+    return (playerIndex % 2 === 0) ? 1 : 2;
+}
+
+// 添加确定抠底玩家的函数
+function determineBottomDealer(gameState) {
+    const mainCallerIndex = gameState.players.findIndex(p => p.id === gameState.mainCaller);
+    const mainCallerTeam = getPlayerTeam(gameState.mainCaller, gameState.players);
+    
+    if (mainCallerTeam === gameState.bankerTeam) {
+        // 如果叫主的是庄家队，则由队友抠底
+        const teamMateIndex = (mainCallerIndex + 2) % 4;
+        return gameState.players[teamMateIndex].id;
+    } else {
+        // 如果叫主的是闲家，则由下家抠底
+        const nextPlayerIndex = (mainCallerIndex + 1) % 4;
+        return gameState.players[nextPlayerIndex].id;
+    }
+}
+
 io.on('connection', (socket) => {
     console.log('用户连接:', socket.id);
 
@@ -283,14 +306,19 @@ io.on('connection', (socket) => {
                     isDealing: true,       // 是否在发牌
                     canCallMain: true,      // 是否可以叫主
                     canStickMain: false,    // 初始设置为false
-                    commonMain: '2'         // 初始常主为2
+                    commonMain: '2',         // 初始常主为2
+                    canDealBottom: false,    // 是否可以抠底
+                    bottomDealDeadline: null  // 抠底截止时间
                 },
                 currentRound: [],
                 bottomCards: [],
                 isMainFixed: false,
                 mainCallDeadline: Date.now() + 100000, // 给100秒的叫主时间
                 counterMainDeadline: null,
-                mainCalled: false
+                mainCalled: false,
+                dealerTeam: null,        // 庄家队伍 [player1.id, player3.id] 或 [player2.id, player4.id]
+                bottomDealer: null,       // 抠底的玩家
+                lastWinningTeam: null,   // 上一局赢的队伍
             };
 
             // 预先分配好牌
@@ -300,6 +328,9 @@ io.on('connection', (socket) => {
                     gameState.players[j].cards.push(card);
                 }
             }
+
+            // 设置庄家队伍
+            gameState.bankerTeam = 1;
 
             // 保存底牌
             gameState.bottomCards = gameState.deck;
@@ -390,7 +421,7 @@ io.on('connection', (socket) => {
                             ...gameState.preGameState,
                             canStealMain: false,
                             canStickMain: true,
-                            stickMainDeadline: Date.now() + 10000
+                            stickMainDeadline: Date.now() + 10000  // 给10秒粘牌时间
                         };
                         
                         io.to(roomId).emit('updateGameState', {
@@ -545,38 +576,79 @@ io.on('connection', (socket) => {
         console.log('Exchange result:', exchangeSuccess);
         
         if (exchangeSuccess) {
-            // 清除粘牌相关状态
-            gameState.stickPlayer = null;
+            // 确定抠底玩家
+            gameState.bottomDealer = determineBottomDealer(gameState);
+            
+            // 进入抠底阶段
+            gameState.phase = 'bottomDeal';
             gameState.preGameState = {
                 ...gameState.preGameState,
                 canStickMain: false,
                 stickMainDeadline: null,
-                canStealMain: false,  // 清除反主状态
-                stealMainDeadline: null  // 清除反主截止时间
+                bottomDealDeadline: Date.now() + 20000  // 给20秒抠底时间
             };
             
-            // 通知玩家交换完成
-            io.to(roomId).emit('cardsExchanged', {
-                mainPlayer: gameState.mainCaller,
-                stickPlayer: socket.id
+            // 确保底牌只有4张
+            if (gameState.bottomCards.length !== 4) {
+                console.log('底牌数量异常:', gameState.bottomCards.length, '设置为4张');
+                // 如果底牌不足4张，添加缺失的牌
+                while (gameState.bottomCards.length < 4) {
+                    const randomCard = { 
+                        suit: ['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'][Math.floor(Math.random() * 4)], 
+                        value: ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'][Math.floor(Math.random() * 13)]
+                    };
+                    gameState.bottomCards.push(randomCard);
+                }
+                // 如果底牌超过4张，截取前4张
+                if (gameState.bottomCards.length > 4) {
+                    gameState.bottomCards = gameState.bottomCards.slice(0, 4);
+                }
+            }
+            
+            console.log('发送的底牌数据:', gameState.bottomCards);
+            console.log('发送的底牌数量:', gameState.bottomCards.length);
+            
+            // 发送底牌给抠底玩家
+            io.to(gameState.bottomDealer).emit('receiveBottomCards', {
+                bottomCards: gameState.bottomCards
             });
             
-            // 进入游戏阶段
-            gameState.phase = 'playing';
+            // 通知所有玩家进入抠底阶段
             io.to(roomId).emit('updateGameState', {
-                phase: 'playing',
-                preGameState: {
-                    ...gameState.preGameState,
-                    canStickMain: false,
-                    stickMainDeadline: null,
-                    canStealMain: false,
-                    stealMainDeadline: null
-                }
+                phase: 'bottomDeal',
+                bottomDealer: gameState.bottomDealer,
+                preGameState: gameState.preGameState
             });
 
-            // 更新玩家手牌
-            io.to(mainPlayer.id).emit('updatePlayerCards', mainPlayer.cards);
-            io.to(stickPlayer.id).emit('updatePlayerCards', stickPlayer.cards);
+            // 添加以下代码：将底牌添加到玩家手牌中
+            const bottomDealer = gameState.players.find(p => p.id === gameState.bottomDealer);
+            if (bottomDealer) {
+                console.log('抠底前玩家手牌数量:', bottomDealer.cards.length);
+                console.log('底牌数量:', gameState.bottomCards.length);
+                
+                // 标记底牌是新加入的，添加唯一ID标识
+                const markedBottomCards = gameState.bottomCards.map((card, index) => ({
+                    ...card,
+                    isFromBottom: true,
+                    bottomId: `bottom-${Date.now()}-${index}` // 添加唯一标识
+                }));
+                
+                console.log('标记的底牌:', markedBottomCards);
+                
+                // 使用展开运算符添加底牌
+                bottomDealer.cards = [...bottomDealer.cards, ...markedBottomCards];
+                
+                console.log('抠底后玩家手牌数量:', bottomDealer.cards.length);
+                console.log('玩家手牌详情:', bottomDealer.cards);
+                
+                // 发送更新后的手牌给玩家
+                io.to(gameState.bottomDealer).emit('updatePlayerCards', bottomDealer.cards);
+            }
+
+            // 发送底牌信息（先于手牌更新发送）
+            socket.emit('receiveBottomCards', {
+                bottomCards: gameState.bottomCards
+            });
         } else {
             // 交换失败通知
             socket.emit('exchangeError', {
@@ -757,7 +829,10 @@ io.on('connection', (socket) => {
             mainCallDeadline: Date.now() + 100000, // 叫主截止时间
             counterMainDeadline: null,
             mainCalled: false,
-            commonMain: '2'  // 初始常主为2
+            commonMain: '2',  // 初始常主为2
+            dealerTeam: null,        // 庄家队伍 [player1.id, player3.id] 或 [player2.id, player4.id]
+            bottomDealer: null,       // 抠底的玩家
+            lastWinningTeam: null,   // 上一局赢的队伍
         };
 
         // 预先准备好牌，但不立即分配
@@ -969,7 +1044,10 @@ io.on('connection', (socket) => {
             mainCallDeadline: Date.now() + 100000,
             counterMainDeadline: null,
             mainCalled: false,
-            commonMain: '2'  // 初始常主为2
+            commonMain: '2',  // 初始常主为2
+            dealerTeam: null,        // 庄家队伍 [player1.id, player3.id] 或 [player2.id, player4.id]
+            bottomDealer: null,       // 抠底的玩家
+            lastWinningTeam: null,   // 上一局赢的队伍
         };
 
         // 预先准备好牌
@@ -1186,7 +1264,10 @@ io.on('connection', (socket) => {
             mainCallDeadline: Date.now() + 100000,
             counterMainDeadline: null,
             mainCalled: false,
-            commonMain: '2'  // 初始常主为2
+            commonMain: '2',  // 初始常主为2
+            dealerTeam: null,        // 庄家队伍 [player1.id, player3.id] 或 [player2.id, player4.id]
+            bottomDealer: null,       // 抠底的玩家
+            lastWinningTeam: null,   // 上一局赢的队伍
         };
 
         // 预先准备机器人的牌（用于叫主）
@@ -1449,7 +1530,10 @@ io.on('connection', (socket) => {
             mainCallDeadline: Date.now() + 100000,
             counterMainDeadline: null,
             mainCalled: false,
-            commonMain: '2'  // 初始常主为2
+            commonMain: '2',  // 初始常主为2
+            dealerTeam: null,        // 庄家队伍 [player1.id, player3.id] 或 [player2.id, player4.id]
+            bottomDealer: null,       // 抠底的玩家
+            lastWinningTeam: null,   // 上一局赢的队伍
         };
 
         // 预先准备机器人的牌（用于叫主和加固）
@@ -1699,9 +1783,7 @@ io.on('connection', (socket) => {
             phase: 'pregame',
             preGameState: {
                 isDealing: true,
-                canCallMain: true,
-                canStickMain: false,  // 初始设置为false
-                commonMain: '2'
+                canCallMain: true
             },
             currentRound: [],
             bottomCards: [],
@@ -1709,7 +1791,10 @@ io.on('connection', (socket) => {
             mainCallDeadline: Date.now() + 100000,
             counterMainDeadline: null,
             mainCalled: false,
-            commonMain: '2'
+            commonMain: '2',  // 初始常主为2
+            dealerTeam: null,        // 庄家队伍 [player1.id, player3.id] 或 [player2.id, player4.id]
+            bottomDealer: null,       // 抠底的玩家
+            lastWinningTeam: null,   // 上一局赢的队伍
         };
 
         // 预先准备机器人的牌（用于叫主）
@@ -1910,6 +1995,387 @@ io.on('connection', (socket) => {
                 dealStickTestCards(0);
             }, 1000);
         }, 2000);
+    });
+
+    // 添加处理抠底的事件
+    socket.on('confirmBottomDeal', ({ roomId, putCards }) => {
+        const gameState = games.get(roomId);
+        if (!gameState || gameState.bottomDealer !== socket.id) {
+            console.log('无效的抠底请求');
+            return;
+        }
+        
+        // 验证放入底牌的数量
+        if (putCards.length !== 4) {
+            console.log('底牌数量不符合要求:', putCards.length);
+            socket.emit('bottomDealError', { message: '必须放入4张牌' });
+            return;
+        }
+        
+        console.log('玩家放入的底牌:', putCards);
+        
+        // 更新底牌
+        gameState.bottomCards = putCards;
+        
+        // 从玩家手牌中移除这些牌
+        const bottomDealer = gameState.players.find(p => p.id === socket.id);
+        if (!bottomDealer) {
+            console.log('找不到抠底玩家');
+            return;
+        }
+        
+        bottomDealer.cards = bottomDealer.cards.filter(card => 
+            !putCards.some(pc => pc.suit === card.suit && pc.value === card.value)
+        );
+        
+        console.log('抠底后玩家剩余的牌数量:', bottomDealer.cards.length);
+        
+        // 进入游戏阶段
+        gameState.phase = 'playing';
+        io.to(roomId).emit('updateGameState', {
+            phase: 'playing'
+        });
+        
+        // 更新抠底玩家的手牌
+        socket.emit('updatePlayerCards', bottomDealer.cards);
+        
+        // 通知所有玩家抠底完成
+        io.to(roomId).emit('bottomDealCompleted', {
+            bottomDealer: socket.id
+        });
+    });
+
+    // 创建抠底测试游戏
+    socket.on('createBottomTestGame', () => {
+        console.log('Creating bottom test game...');
+        const roomId = Math.random().toString(36).slice(2, 8);
+        
+        // 添加真实玩家（当前连接的用户）
+        const players = [{
+            id: socket.id,
+            ready: true,
+            name: `玩家${socket.id.slice(0, 4)}`
+        }];
+        
+        // 添加3个机器人玩家
+        for (let i = 1; i <= 3; i++) {
+            const botId = `bot-${i}-${Math.random().toString(36).slice(2, 6)}`;
+            players.push({
+                id: botId,
+                ready: true,
+                name: `机器人${i}`,
+                isBot: true
+            });
+        }
+        
+        // 创建房间
+        const room = { id: roomId, players: players };
+        
+        // 创建牌堆
+        const fullDeck = createDeck();
+        console.log('原始牌堆数量:', fullDeck.length);
+        
+        // 预先准备对家（机器人）的牌
+        const botCards = [
+            { suit: 'JOKER', value: 'BIG' },  // 大王
+            { suit: 'HEARTS', value: 'A' },    // 红桃A
+            { suit: 'HEARTS', value: 'A' }     // 红桃A
+        ];
+        
+        // 从牌堆中移除这些预设的牌
+        // 这里先找到第一张与预设牌匹配的牌并移除，避免移除多张
+        const deck = [...fullDeck]; // 复制一份以便修改
+        
+        botCards.forEach(botCard => {
+            const cardIndex = deck.findIndex(card => 
+                card.suit === botCard.suit && card.value === botCard.value
+            );
+            
+            if (cardIndex !== -1) {
+                deck.splice(cardIndex, 1);
+                console.log(`已从牌堆中移除 ${botCard.suit} ${botCard.value}`);
+            } else {
+                console.log(`牌堆中未找到 ${botCard.suit} ${botCard.value}`);
+            }
+        });
+        
+        console.log('移除预设牌后的牌堆数量:', deck.length);
+        
+        // 洗牌
+        const shuffledDeck = shuffleDeck(deck);
+        
+        // 创建游戏状态
+        const gameState = {
+            deck: shuffledDeck,
+            players: players.map(p => ({
+                ...p,
+                cards: [],
+                isDealer: false
+            })),
+            currentTurn: null,
+            mainSuit: null,
+            mainCaller: null,
+            mainCards: null,
+            phase: 'pregame',
+            preGameState: {
+                isDealing: true,
+                canCallMain: true,
+                commonMain: '2'
+            },
+            currentRound: [],
+            bottomCards: [],
+            isMainFixed: false,
+            mainCallDeadline: Date.now() + 100000,
+            counterMainDeadline: null,
+            mainCalled: false,
+            bankerTeam: 1,  // 设置1队为庄家队
+            bottomDealer: null,
+            lastWinningTeam: null
+        };
+
+        function dealBottomTestCards(currentRound = 0) {
+            const totalRounds = 26;  // 每人26张牌
+            console.log(`Dealing bottom test round ${currentRound + 1}/${totalRounds}`);
+
+            // 第一张牌时，设置初始状态
+            if (currentRound === 0) {
+                console.log('First bottom test card dealt');
+                gameState.preGameState = {
+                    isDealing: true,
+                    canCallMain: true,
+                    commonMain: gameState.preGameState.commonMain || '2'
+                };
+                io.to(roomId).emit('updateGameState', {
+                    phase: 'pregame',
+                    preGameState: gameState.preGameState
+                });
+            }
+
+            // 在发第三张牌后，让对家（机器人）叫主
+            if (currentRound === 2) {
+                setTimeout(() => {
+                    // 获取对家机器人的ID（玩家位置+2）
+                    const partnerIndex = 2;  // 对家位置
+                    const botId = gameState.players[partnerIndex].id;
+                    
+                    if (gameState && gameState.preGameState.canCallMain && !gameState.mainCalled) {
+                        console.log('Bot partner is calling main');
+                        
+                        gameState.mainSuit = 'HEARTS';
+                        gameState.mainCaller = botId;
+                        gameState.mainCards = {
+                            joker: 'BIG',
+                            pair: { suit: 'HEARTS', value: 'A' }
+                        };
+                        gameState.mainCalled = true;
+                        
+                        if (gameState.preGameState.isDealing) {
+                            gameState.preGameState.stealMainDelayed = true;
+                            
+                            io.to(roomId).emit('mainCalled', {
+                                mainSuit: 'HEARTS',
+                                mainCaller: botId,
+                                mainCards: {
+                                    joker: 'BIG',
+                                    pair: { suit: 'HEARTS', value: 'A' }
+                                }
+                            });
+                        }
+                        
+                        gameState.preGameState = {
+                            ...gameState.preGameState,
+                            canCallMain: false,
+                            canStealMain: true
+                        };
+                        
+                        io.to(roomId).emit('updateGameState', {
+                            phase: 'pregame',
+                            preGameState: {
+                                ...gameState.preGameState,
+                                commonMain: gameState.preGameState.commonMain
+                            }
+                        });
+                    }
+                }, 500);
+            }
+
+            if (currentRound >= totalRounds) {
+                console.log('All cards dealt');
+                gameState.preGameState.isDealing = false;
+                
+                // 发完牌后，剩下的牌作为底牌（应该正好是4张）
+                gameState.bottomCards = gameState.deck;
+                console.log('底牌设置完成:', gameState.bottomCards);
+                console.log('底牌数量:', gameState.bottomCards.length);
+                
+                if (gameState.mainCalled && gameState.preGameState.stealMainDelayed) {
+                    console.log('Setting steal main deadline after dealing completed');
+                    const stealMainDeadline = Date.now() + 3000;
+                    gameState.preGameState.stealMainDeadline = stealMainDeadline;
+                    gameState.preGameState.stealMainDelayed = false;
+                    
+                    io.to(roomId).emit('updateGameState', {
+                        phase: 'pregame',
+                        preGameState: {
+                            ...gameState.preGameState,
+                            commonMain: gameState.preGameState.commonMain
+                        }
+                    });
+                    
+                    io.to(roomId).emit('mainCalled', {
+                        mainSuit: gameState.mainSuit,
+                        mainCaller: gameState.mainCaller,
+                        mainCards: gameState.mainCards,
+                        stealMainDeadline: stealMainDeadline
+                    });
+
+                    // 3秒后进入粘牌阶段
+                    setTimeout(() => {
+                        console.log('Entering stick phase');
+                        gameState.phase = 'stickPhase';
+                        gameState.preGameState = {
+                            ...gameState.preGameState,
+                            canStealMain: false,
+                            canStickMain: true,
+                            stickMainDeadline: Date.now() + 3000
+                        };
+                        
+                        io.to(roomId).emit('updateGameState', {
+                            phase: 'stickPhase',
+                            preGameState: gameState.preGameState
+                        });
+
+                        // 3秒后进入抠底阶段
+                        setTimeout(() => {
+                            console.log('Entering bottom deal phase');
+                            // 设置抠底玩家（玩家本人，因为是庄家队）
+                            gameState.bottomDealer = socket.id;
+                            gameState.phase = 'bottomDeal';
+                            
+                            // 确保底牌有4张
+                            if (gameState.bottomCards.length !== 4) {
+                                console.log('底牌数量异常:', gameState.bottomCards.length, '设置为4张');
+                                // 如果底牌不足4张，添加缺失的牌
+                                while (gameState.bottomCards.length < 4) {
+                                    const randomCard = { 
+                                        suit: ['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'][Math.floor(Math.random() * 4)], 
+                                        value: ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'][Math.floor(Math.random() * 13)]
+                                    };
+                                    gameState.bottomCards.push(randomCard);
+                                }
+                                // 如果底牌超过4张，截取前4张
+                                if (gameState.bottomCards.length > 4) {
+                                    gameState.bottomCards = gameState.bottomCards.slice(0, 4);
+                                }
+                            }
+                            
+                            gameState.preGameState = {
+                                ...gameState.preGameState,
+                                canStickMain: false,
+                                stickMainDeadline: null,
+                                bottomDealDeadline: Date.now() + 20000  // 给20秒抠底时间
+                            };
+                            
+                            // 查找抠底玩家并添加底牌到他的手牌中
+                            const bottomDealerPlayer = gameState.players.find(p => p.id === gameState.bottomDealer);
+                            if (bottomDealerPlayer) {
+                                console.log('抠底前玩家手牌数量:', bottomDealerPlayer.cards.length);
+                                console.log('底牌数量:', gameState.bottomCards.length);
+                                
+                                // 清除之前可能添加的标记（防止重复添加）
+                                bottomDealerPlayer.cards = bottomDealerPlayer.cards.filter(card => !card.isFromBottom);
+                                
+                                // 标记底牌并添加到玩家手牌
+                                const markedBottomCards = gameState.bottomCards.map(card => ({
+                                    ...card,
+                                    isFromBottom: true
+                                }));
+                                
+                                console.log('标记的底牌:', markedBottomCards);
+                                
+                                // 使用展开运算符添加底牌
+                                bottomDealerPlayer.cards = [...bottomDealerPlayer.cards, ...markedBottomCards];
+                                
+                                console.log('抠底后玩家手牌数量:', bottomDealerPlayer.cards.length);
+                                console.log('玩家手牌详情:', bottomDealerPlayer.cards);
+                                
+                                // 发送更新后的手牌给玩家
+                                io.to(gameState.bottomDealer).emit('updatePlayerCards', bottomDealerPlayer.cards);
+                            }
+                            
+                            // 发送底牌信息
+                            socket.emit('receiveBottomCards', {
+                                bottomCards: gameState.bottomCards
+                            });
+                            
+                            // 通知所有玩家进入抠底阶段
+                            io.to(roomId).emit('updateGameState', {
+                                phase: 'bottomDeal',
+                                bottomDealer: gameState.bottomDealer,
+                                preGameState: gameState.preGameState
+                            });
+                        }, 3000);
+                    }, 3000);
+                }
+                
+                return;
+            }
+
+            // 给所有玩家发牌
+            gameState.players.forEach((player, index) => {
+                let card;
+                
+                // 对家特定位置给特定的牌
+                if (index === 2 && currentRound < botCards.length) {
+                    card = botCards[currentRound];
+                } else {
+                    card = gameState.deck.pop();
+                }
+                
+                if (card) {
+                    player.cards.push(card);
+                    io.to(player.id).emit('receiveCard', {
+                        card,
+                        cardIndex: currentRound,
+                        totalCards: totalRounds
+                    });
+                }
+            });
+
+            // 广播发牌进度
+            io.to(roomId).emit('dealingProgress', {
+                currentRound: currentRound + 1,
+                totalRounds
+            });
+
+            // 继续下一轮发牌
+            setTimeout(() => {
+                dealBottomTestCards(currentRound + 1);
+            }, 100);
+        }
+
+        // 存储游戏状态和房间信息
+        games.set(roomId, gameState);
+        rooms.set(roomId, room);
+        
+        socket.join(roomId);
+        socket.emit('joinRoomSuccess', roomId);
+        io.to(roomId).emit('roomInfo', room);
+        
+        socket.emit('testGameCreated', { 
+            roomId,
+            message: '抠底测试：对家将叫红桃主，您将抠底'
+        });
+        
+        // 开始游戏
+        setTimeout(() => {
+            console.log('Starting bottom test game...');
+            io.to(roomId).emit('gameStart');
+            
+            setTimeout(() => {
+                dealBottomTestCards(0);
+            }, 500);
+        }, 1000);
     });
 });
 

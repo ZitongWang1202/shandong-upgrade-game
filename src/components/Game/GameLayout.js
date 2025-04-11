@@ -27,6 +27,7 @@ function GameLayout() {
         isDealing: false, 
         canCallMain: false,
         canStickMain: false,  // 添加是否可以粘主的状态
+        stickMainDeadline: null,  // 添加粘主截止时间
     }); 
     
     // 游戏状态
@@ -78,14 +79,19 @@ function GameLayout() {
 
     // 添加粘主倒计时状态
     const [stickMainTimeLeft, setStickMainTimeLeft] = useState(null);
-
-    // 添加粘主截止时间状态
     const [stickMainDeadline, setStickMainDeadline] = useState(null);
 
     // 在状态部分添加新的状态
     const [selectedCards, setSelectedCards] = useState([]);
     const [maxSelectableCards, setMaxSelectableCards] = useState(0);
     const [cardSelectionValidator, setCardSelectionValidator] = useState(null);
+
+    // 添加抠底相关状态
+    const [isBottomDealer, setIsBottomDealer] = useState(false);
+    const [bottomCards, setBottomCards] = useState([]);
+    const [selectedBottomCards, setSelectedBottomCards] = useState([]);
+    const [bottomDealDeadline, setBottomDealDeadline] = useState(null);
+    const [bottomDealTimeLeft, setBottomDealTimeLeft] = useState(null);
 
     // 添加卡牌选择验证器
     const validators = {
@@ -106,6 +112,9 @@ function GameLayout() {
             return currentSelected.length < 3;
         }
     };
+
+    // 在 GameLayout.js 中添加一个新的状态来跟踪来自底牌的牌
+    const [cardsFromBottom, setCardsFromBottom] = useState([]);
 
     // 计算牌的权重（用于排序）
     const getCardWeight = useCallback((card) => {
@@ -155,7 +164,19 @@ function GameLayout() {
 
     // 排序牌
     const sortCards = useCallback((cards) => {
-        return [...cards].sort((a, b) => getCardWeight(b) - getCardWeight(a));
+        console.log('排序函数收到的牌数量:', cards.length);
+        console.log('排序前的牌:', JSON.stringify(cards));
+        
+        if (!cards || !Array.isArray(cards)) {
+            console.error('排序函数收到的不是数组');
+            return [];
+        }
+        
+        const sortedCards = [...cards].sort((a, b) => getCardWeight(b) - getCardWeight(a));
+        console.log('排序后的牌数量:', sortedCards.length);
+        console.log('排序后的牌:', JSON.stringify(sortedCards));
+        
+        return sortedCards;
     }, [getCardWeight]);
 
     // 检查是否有大小王
@@ -374,8 +395,15 @@ function GameLayout() {
         }
     };
 
-    // 通用的卡牌选择处理函数
+    // 修改通用的卡牌选择处理函数
     const handleCardSelect = (card) => {
+        // 如果是抠底阶段
+        if (gamePhase === 'bottomDeal' && isBottomDealer) {
+            handleBottomCardSelect(card);
+            return;
+        }
+
+        // 原有的选牌逻辑
         if (!cardSelectionValidator) return;
 
         const isCardSelected = selectedCards.some(
@@ -383,12 +411,10 @@ function GameLayout() {
         );
 
         if (isCardSelected) {
-            // 取消选择
             setSelectedCards(prev => 
                 prev.filter(c => !(c.suit === card.suit && c.value === card.value))
             );
         } else {
-            // 验证是否可以选择
             if (cardSelectionValidator(card, selectedCards)) {
                 setSelectedCards(prev => [...prev, card]);
             }
@@ -445,19 +471,33 @@ function GameLayout() {
         
         // 监听单轮发牌
         socket.on('receiveCard', ({ card, cardIndex, totalCards }) => {
-            // console.log('收到一张牌:', card, '索引:', cardIndex);
-            // if (card.suit === 'JOKER' && card.value === 'BIG') {
-            //     console.log('收到大王');
-            // }
+            console.log('收到一张牌:', card, '索引:', cardIndex, '总牌数:', totalCards);
             
             setPlayerCards(prev => {
-                // 创建一个新数组，确保有足够的空间
-                const newCards = Array.from({ length: totalCards }, (_, i) => prev[i] || null);
-                // 将新牌放入对应位置
-                newCards[cardIndex] = card;
-                // 过滤掉空值并排序
-                const updatedCards = sortCards(newCards.filter(Boolean));
-                return updatedCards;
+                // 创建一个新数组，保留所有现有牌，包括底牌
+                const updatedCards = [...prev];
+                
+                // 如果索引在合理范围内，直接更新
+                if (cardIndex >= 0 && cardIndex < totalCards) {
+                    // 保留所有isFromBottom标记的牌
+                    const bottomCards = prev.filter(c => c.isFromBottom);
+                    
+                    // 把这张新牌放到正确的位置
+                    const normalCards = prev.filter(c => !c.isFromBottom);
+                    if (cardIndex < normalCards.length) {
+                        normalCards[cardIndex] = card;
+                    } else {
+                        // 如果索引超出范围，直接添加
+                        normalCards.push(card);
+                    }
+                    
+                    // 合并普通牌和底牌，并排序
+                    return sortCards([...normalCards, ...bottomCards]);
+                }
+                
+                // 直接添加到牌组末尾并排序
+                updatedCards.push(card);
+                return sortCards(updatedCards);
             });
         });
 
@@ -624,9 +664,42 @@ function GameLayout() {
             // 这里可以添加错误提示
         });
 
-        // 添加手牌更新监听
+        // 修改接收底牌的监听器
+        socket.on('receiveBottomCards', ({ bottomCards }) => {
+            console.log('客户端收到的底牌数据:', bottomCards);
+            console.log('底牌数量:', bottomCards ? bottomCards.length : 0);
+            setBottomCards(bottomCards || []);
+            setIsBottomDealer(true);
+            
+            // 记录底牌的标识，用于高亮显示
+            const bottomCardIds = (bottomCards || []).map(card => `${card.suit}-${card.value}`);
+            setCardsFromBottom(bottomCardIds);
+            
+            // 不再在这里更新手牌，由服务器通过 updatePlayerCards 事件更新
+        });
+
+        // 监听抠底错误
+        socket.on('bottomDealError', ({ message }) => {
+            // 这里可以添加错误提示
+            console.error(message);
+        });
+
+        // 监听更新玩家手牌，恢复排序
         socket.on('updatePlayerCards', (cards) => {
-            console.log('Received updated cards:', cards);
+            console.log('Received updated player cards:', cards);
+            
+            // 更新底牌标识列表
+            const bottomCardIds = cards
+                .filter(card => card.isFromBottom)
+                .map(card => `${card.suit}-${card.value}`);
+            
+            if (bottomCardIds.length > 0) {
+                console.log('底牌数量:', bottomCardIds.length);
+                console.log('底牌标识:', bottomCardIds);
+                setCardsFromBottom(bottomCardIds);
+            }
+            
+            // 排序玩家手牌
             setPlayerCards(sortCards(cards));
         });
 
@@ -643,6 +716,8 @@ function GameLayout() {
             socket.off('cardsExchanged');
             socket.off('exchangeError');
             socket.off('updatePlayerCards');
+            socket.off('receiveBottomCards');
+            socket.off('bottomDealError');
         };
     }, [sortCards]); // 只依赖sortCards，因为它是稳定的callback函数
 
@@ -719,6 +794,56 @@ function GameLayout() {
             };
         }
     }, [stickMainDeadline, hasStickCards]);
+
+    // 抠底倒计时
+    useEffect(() => {
+        if (bottomDealDeadline) {
+            const intervalId = setInterval(() => {
+                const now = Date.now();
+                const timeLeft = Math.max(0, Math.floor((bottomDealDeadline - now) / 1000));
+                setBottomDealTimeLeft(timeLeft);
+                
+                if (timeLeft <= 0) {
+                    clearInterval(intervalId);
+                }
+            }, 1000);
+            
+            return () => clearInterval(intervalId);
+        }
+    }, [bottomDealDeadline]);
+
+    // 添加处理抠底的函数
+    const handleConfirmBottomDeal = () => {
+        if (selectedBottomCards.length === 4) {
+            socket.emit('confirmBottomDeal', {
+                roomId: localStorage.getItem('roomId'),
+                putCards: selectedBottomCards
+            });
+            
+            // 清理相关状态
+            setSelectedBottomCards([]);
+            setIsBottomDealer(false);
+            setBottomDealTimeLeft(null);
+            setCardsFromBottom([]);  // 清除底牌高亮
+        }
+    };
+
+    // 添加处理选择底牌的函数
+    const handleBottomCardSelect = (card) => {
+        if (!isBottomDealer) return;
+
+        const isSelected = selectedBottomCards.some(
+            c => c.suit === card.suit && c.value === card.value
+        );
+
+        if (isSelected) {
+            setSelectedBottomCards(prev => 
+                prev.filter(c => !(c.suit === card.suit && c.value === card.value))
+            );
+        } else if (selectedBottomCards.length < 4) {
+            setSelectedBottomCards(prev => [...prev, card]);
+        }
+    };
 
     // 渲染界面
     return (
@@ -928,16 +1053,26 @@ function GameLayout() {
             >
                 <div className="player-hand">
                     {playerCards.map((card, index) => {
-                        const isSelected = selectedCards.some(
-                            c => c.suit === card.suit && c.value === card.value
-                        );
+                        const isSelected = 
+                            (gamePhase === 'bottomDeal' && isBottomDealer)
+                                ? selectedBottomCards.some(c => c.suit === card.suit && c.value === card.value)
+                                : selectedCards.some(c => c.suit === card.suit && c.value === card.value);
                         
-                        const canSelect = cardSelectionValidator?.(card, selectedCards);
+                        const canSelect = 
+                            (gamePhase === 'bottomDeal' && isBottomDealer)
+                                ? selectedBottomCards.length < 4
+                                : cardSelectionValidator?.(card, selectedCards);
+                        
+                        // 修改底牌检测逻辑
+                        const isFromBottom = card.isFromBottom && 
+                            cardsFromBottom.includes(`${card.suit}-${card.value}`);
                         
                         return (
                             <div 
                                 key={`${card.suit}-${card.value}-${index}`} 
-                                className={`card-container ${isSelected ? 'selected' : ''} ${!canSelect ? 'disabled' : ''}`}
+                                className={`card-container ${isSelected ? 'selected' : ''} 
+                                          ${!canSelect ? 'disabled' : ''} 
+                                          ${isFromBottom ? 'from-bottom' : ''}`}
                                 onClick={() => handleCardSelect(card)}
                             >
                                 <Card 
@@ -1027,6 +1162,65 @@ function GameLayout() {
                         >
                             确认交换
                         </Button>
+                    </Box>
+                </Box>
+            )}
+
+            {/* 抠底界面 */}
+            {gamePhase === 'bottomDeal' && isBottomDealer && (
+                <Box 
+                    position="absolute" 
+                    top="50%" 
+                    left="50%" 
+                    transform="translate(-50%, -50%)"
+                    bg="white"
+                    p={4}
+                    borderRadius="md"
+                    boxShadow="lg"
+                    zIndex={10}
+                >
+                    {/* 显示原来的底牌 */}
+                    {bottomCards && bottomCards.length > 0 && (
+                        <Box mb={4}>
+                            <Text fontWeight="bold" mb={2}>原底牌：</Text>
+                            <HStack spacing={2}>
+                                {console.log('渲染的底牌数据:', bottomCards)}
+                                {console.log('底牌数量:', bottomCards.length)}
+                                {(bottomCards || []).map((card, index) => (
+                                    <Card 
+                                        key={index}
+                                        suit={card.suit}
+                                        value={card.value}
+                                    />
+                                ))}
+                            </HStack>
+                        </Box>
+                    )}
+
+                    {/* 选择要放入底牌的牌 */}
+                    <Box>
+                        <Text fontWeight="bold" mb={2}>请选择4张牌放入底牌：</Text>
+                        <VStack align="start" spacing={2} mb={4}>
+                            <HStack>
+                                <Text>已选择 {selectedBottomCards.length}/4 张牌</Text>
+                                {selectedBottomCards.length === 4 && (
+                                    <Text color="green.500" ml={2}>✓</Text>
+                                )}
+                            </HStack>
+                        </VStack>
+                        <Button
+                            colorScheme="green"
+                            onClick={handleConfirmBottomDeal}
+                            isDisabled={selectedBottomCards.length !== 4}
+                            width="100%"
+                        >
+                            确认放底
+                        </Button>
+                        {bottomDealTimeLeft !== null && (
+                            <Text mt={2} textAlign="center" color={bottomDealTimeLeft <= 5 ? "red.500" : "gray.500"}>
+                                {bottomDealTimeLeft}秒
+                            </Text>
+                        )}
                     </Box>
                 </Box>
             )}
