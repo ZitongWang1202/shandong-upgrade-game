@@ -89,10 +89,16 @@ const LobbyPage = () => {
     socket.emit('createStickTestGame');
   };
 
-  // 删除 handleStartTest 函数，添加新的 createBottomTestGame 函数
+  //  创建抠底测试游戏
   const createBottomTestGame = () => {
     console.log('Creating bottom test game');
     socket.emit('createBottomTestGame');
+  };
+
+  // 创建出牌测试游戏
+  const createPlayingTestGame = () => {
+    console.log('Creating playing test game');
+    socket.emit('createPlayingTest');
   };
 
   return (
@@ -131,10 +137,14 @@ const LobbyPage = () => {
             </Tooltip>
             <Tooltip label="抠底测试：对家叫主后进入抠底阶段" hasArrow>
               <Button
-                colorScheme="yellow"
-                onClick={createBottomTestGame}
-              >
+                colorScheme="yellow" onClick={createBottomTestGame}>
                 抠底测试
+              </Button>
+            </Tooltip>
+            <Tooltip label="出牌测试：直接进入出牌阶段" hasArrow>
+              <Button
+                colorScheme="pink" onClick={createPlayingTestGame}>
+                出牌测试
               </Button>
             </Tooltip>
           </HStack>

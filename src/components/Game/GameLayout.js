@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
     Box, 
     Center, 
@@ -93,8 +93,18 @@ function GameLayout() {
     const [bottomDealDeadline, setBottomDealDeadline] = useState(null);
     const [bottomDealTimeLeft, setBottomDealTimeLeft] = useState(null);
 
-    // 添加卡牌选择验证器
-    const validators = {
+    // 在 GameLayout.js 中添加一个新的状态来跟踪来自底牌的牌
+    const [cardsFromBottom, setCardsFromBottom] = useState([]);
+
+    // 在组件顶部添加新的状态
+    const [interactedBottomCards, setInteractedBottomCards] = useState(new Set());
+
+    // 在 GameLayout.js 中添加新的状态
+    const [isMyTurn, setIsMyTurn] = useState(false);
+    const [currentPlayer, setCurrentPlayer] = useState(null);
+
+    // 卡牌选择验证器对象
+    const validators = useMemo(() => ({
         stickPhase: (card, currentSelected) => {
             // 如果已经选了3张牌，不能再选
             if (currentSelected.length >= 3) return false;
@@ -108,16 +118,25 @@ function GameLayout() {
             return card.suit === mainSuit && currentSelected.length < 3;
         },
         gaming: (card, currentSelected) => {
-            // 出牌阶段的验证逻辑
-            return currentSelected.length < 3;
+            // 添加调试日志
+            console.log('Gaming validator called with:', {
+                isMyTurn,
+                card,
+                currentSelectedLength: currentSelected.length
+            });
+            
+            // 如果不是自己的回合，不能出牌
+            if (!isMyTurn) {
+                console.log('Cannot select card: not my turn');
+                return false;
+            }
+            
+            // 在游戏初期，简单实现为允许选择任意牌，最多3张
+            const canSelect = currentSelected.length < 3;
+            console.log('Can select card:', canSelect);
+            return canSelect;
         }
-    };
-
-    // 在 GameLayout.js 中添加一个新的状态来跟踪来自底牌的牌
-    const [cardsFromBottom, setCardsFromBottom] = useState([]);
-
-    // 在组件顶部添加新的状态
-    const [interactedBottomCards, setInteractedBottomCards] = useState(new Set());
+    }), [isMyTurn, commonMain, mainSuit]);
 
     // 计算牌的权重（用于排序）
     const getCardWeight = useCallback((card) => {
@@ -400,24 +419,37 @@ function GameLayout() {
 
     // 修改通用的卡牌选择处理函数
     const handleCardSelect = (card) => {
+        console.log('Card clicked:', card, 'gamePhase:', gamePhase, 'isMyTurn:', isMyTurn);
+        
         // 如果是抠底阶段
         if (gamePhase === 'bottomDeal' && isBottomDealer) {
             handleBottomCardSelect(card);
             return;
         }
 
-        // 原有的选牌逻辑
-        if (!cardSelectionValidator) return;
+        // 出牌阶段
+        if (gamePhase === 'playing') {
+            console.log('In playing phase, validator:', cardSelectionValidator ? 'exists' : 'null');
+        }
 
-        // 使用索引来找到完全相同的卡牌对象
+        // 原有的选牌逻辑
+        if (!cardSelectionValidator) {
+            console.log('No card selection validator');
+            return;
+        }
+
         const cardIndex = playerCards.findIndex(c => c === card);
+        console.log('Card index:', cardIndex);
+        
         const isCardSelected = selectedCards.some(c => {
             const selectedIndex = playerCards.findIndex(pc => pc === c);
             return selectedIndex === cardIndex;
         });
+        
+        console.log('Is card already selected:', isCardSelected);
 
         if (isCardSelected) {
-            // 取消选中 - 使用索引来确保只取消特定的那张牌
+            // 取消选中
             setSelectedCards(prev => 
                 prev.filter(c => {
                     const selectedIndex = playerCards.findIndex(pc => pc === c);
@@ -425,7 +457,10 @@ function GameLayout() {
                 })
             );
         } else {
-            if (cardSelectionValidator(card, selectedCards)) {
+            const canSelectCard = cardSelectionValidator(card, selectedCards);
+            console.log('Can select card according to validator:', canSelectCard);
+            
+            if (canSelectCard) {
                 setSelectedCards(prev => [...prev, card]);
             }
         }
@@ -436,6 +471,9 @@ function GameLayout() {
         if (gamePhase === 'stickPhase') {
             setMaxSelectableCards(3);
             setCardSelectionValidator(() => validators.stickPhase);
+        } else if (gamePhase === 'playing') {
+            setMaxSelectableCards(3);
+            setCardSelectionValidator(() => validators.gaming);
         } else if (gamePhase === 'gaming') {
             setMaxSelectableCards(3);
             setCardSelectionValidator(() => validators.gaming);
@@ -443,7 +481,7 @@ function GameLayout() {
             setMaxSelectableCards(0);
             setCardSelectionValidator(null);
         }
-    }, [gamePhase, mainSuit, commonMain]);
+    }, [gamePhase, mainSuit, commonMain, validators]);
 
     // 修改确认交换的处理函数
     const handleConfirmStickCards = () => {
@@ -697,6 +735,13 @@ function GameLayout() {
         // 监听更新玩家手牌，恢复排序
         socket.on('updatePlayerCards', (cards) => {
             console.log('Received updated player cards:', cards);
+            console.log('Cards type:', typeof cards);
+            console.log('Is array:', Array.isArray(cards));
+            
+            if (!Array.isArray(cards)) {
+                console.error('接收到的牌不是数组');
+                return;
+            }
             
             // 更新底牌标识列表
             const bottomCardIds = cards
@@ -711,6 +756,52 @@ function GameLayout() {
             
             // 排序玩家手牌
             setPlayerCards(sortCards(cards));
+        });
+
+        // 监听游戏阶段变化
+        socket.on('gamePhaseChanged', (data) => {
+            if (data.phase === 'playing') {
+                setGamePhase('playing');
+                
+                // 如果是抠底玩家，设置为当前出牌玩家
+                if (data.currentPlayer === socket.id) {
+                    setIsMyTurn(true);
+                }
+                
+                setCurrentPlayer(data.currentPlayer);
+            }
+        });
+        
+        // 监听轮到谁出牌
+        socket.on('playerTurn', (data) => {
+            console.log('Received playerTurn event:', data);
+            setCurrentPlayer(data.player);
+            const isCurrentPlayerTurn = data.player === socket.id;
+            console.log('Is current player turn:', isCurrentPlayerTurn, 'socket.id:', socket.id);
+            setIsMyTurn(isCurrentPlayerTurn);
+        });
+        
+        // 监听其他玩家出牌
+        socket.on('cardPlayed', (data) => {
+            console.log(`玩家 ${data.player} 出了 ${data.cards.length} 张牌`);
+            // TODO: 在界面上显示其他玩家出的牌
+        });
+        
+        // 监听轮次结束
+        socket.on('roundEnd', (data) => {
+            console.log(`本轮结束，玩家 ${data.winner} 获胜`);
+            // TODO: 显示本轮结果
+            
+            // 如果下一个出牌的是自己
+            if (data.nextPlayer === socket.id) {
+                setIsMyTurn(true);
+            }
+        });
+        
+        // 监听出牌错误
+        socket.on('playError', (data) => {
+            console.error(data.message);
+            // TODO: 显示错误信息
         });
 
         return () => {
@@ -728,6 +819,11 @@ function GameLayout() {
             socket.off('updatePlayerCards');
             socket.off('receiveBottomCards');
             socket.off('bottomDealError');
+            socket.off('gamePhaseChanged');
+            socket.off('playerTurn');
+            socket.off('cardPlayed');
+            socket.off('roundEnd');
+            socket.off('playError');
         };
     }, [sortCards]); // 只依赖sortCards，因为它是稳定的callback函数
 
@@ -872,6 +968,21 @@ function GameLayout() {
                 newSet.add(`${card.suit}-${card.value}-${cardIndex}`);
                 return newSet;
             });
+        }
+    };
+
+    // 修改 handlePlayCards 函数
+    const handlePlayCards = () => {
+        if (selectedCards.length > 0 && isMyTurn) {
+            // 发送出牌事件到服务器
+            socket.emit('playCards', {
+                roomId: localStorage.getItem('roomId'),
+                cards: selectedCards
+            });
+            
+            // 清理选中状态
+            setSelectedCards([]);
+            setIsMyTurn(false);
         }
     };
 
@@ -1265,6 +1376,28 @@ function GameLayout() {
                         )}
                     </Box>
                 </Box>
+            )}
+
+            {/* 在玩家手牌区域下方添加 playing 阶段的 UI 组件 */}
+            {gamePhase === 'playing' && (
+                <VStack position="absolute" top="60%" left="50%" transform="translate(-50%, -50%)" spacing={4}>
+                    {isMyTurn ? (
+                        <Text fontSize="xl" fontWeight="bold" color="green.500">
+                            轮到你出牌了!
+                        </Text>
+                    ) : (
+                        <Text fontSize="xl" fontWeight="bold">
+                            等待其他玩家出牌...
+                        </Text>
+                    )}
+                    <Button
+                        colorScheme="blue"
+                        onClick={handlePlayCards}
+                        isDisabled={selectedCards.length === 0 || !isMyTurn}
+                    >
+                        出牌
+                    </Button>
+                </VStack>
             )}
         </Box>
     );
