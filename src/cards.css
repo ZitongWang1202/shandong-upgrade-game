@@ -14,12 +14,14 @@
     transform: translateY(-10px);
 }
 
+/* 卡牌基础样式 */
 .player-card {
     height: var(--card-height);
     width: var(--card-width);
     object-fit: contain;
     cursor: pointer;
     transition: transform 0.3s ease;
+    display: block;
 }
 
 .player-card-back {
@@ -34,6 +36,7 @@
     box-shadow: 0 0 20px rgba(0,0,0,0.3);
 }
 
+/* 玩家区域样式 */
 .player-area {
     padding: 1rem;
     background: rgba(255,255,255,0.1);
@@ -47,12 +50,12 @@
     margin: 1rem;
 }
 
-/* 玩家手牌区域的基础样式 */
+/* 手牌区域样式 */
 .player-hand {
     display: flex;
     align-items: flex-end;
     position: relative;
-    padding: 20px 0; /* 为悬浮效果预留空间 */
+    padding: 20px 0;
 }
 
 /* 卡牌容器基础样式 */
@@ -88,14 +91,6 @@
     margin-left: -30px;
 }
 
-/* 玩家手牌样式 */
-.player-card {
-    height: var(--card-height);
-    width: var(--card-width);
-    object-fit: contain;
-    display: block;
-}
-
 /* 响应式调整 */
 @media (max-width: 768px) {
     .player-area {
@@ -115,10 +110,14 @@
         width: calc(var(--card-width)*3/4);
     }
     
-    .player-card, .player-card-back {
+    .player-card {
         height: calc(var(--card-height)*3/5);
         width: calc(var(--card-width)*3/5);
         margin: 0 0.3rem;
+    }
+
+    .player-area {
+        padding: 0.5rem;
     }
 
     .house-cards {
@@ -130,5 +129,9 @@
         flex-wrap: wrap;
         gap: 1rem;
     }
-
   }
+
+/* 修改底牌高亮样式 - 只在初始状态上移 */
+.card-container .player-card.from-bottom {
+    transform: translateY(-10px); /* 初始上移10px */
+}

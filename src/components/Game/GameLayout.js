@@ -116,6 +116,9 @@ function GameLayout() {
     // 在 GameLayout.js 中添加一个新的状态来跟踪来自底牌的牌
     const [cardsFromBottom, setCardsFromBottom] = useState([]);
 
+    // 在组件顶部添加新的状态
+    const [interactedBottomCards, setInteractedBottomCards] = useState(new Set());
+
     // 计算牌的权重（用于排序）
     const getCardWeight = useCallback((card) => {
         // 大小王权重
@@ -845,6 +848,17 @@ function GameLayout() {
         }
     };
 
+    // 修改卡牌点击或悬浮的处理函数
+    const handleCardInteraction = (card) => {
+        if (card.isFromBottom) {
+            setInteractedBottomCards(prev => {
+                const newSet = new Set(prev);
+                newSet.add(`${card.suit}-${card.value}`);
+                return newSet;
+            });
+        }
+    };
+
     // 渲染界面
     return (
         <Box position="relative" h="100vh" bg="gray.100">
@@ -1066,19 +1080,23 @@ function GameLayout() {
                         // 修改底牌检测逻辑
                         const isFromBottom = card.isFromBottom && 
                             cardsFromBottom.includes(`${card.suit}-${card.value}`);
+                        const hasInteracted = interactedBottomCards.has(`${card.suit}-${card.value}`);
                         
                         return (
                             <div 
                                 key={`${card.suit}-${card.value}-${index}`} 
                                 className={`card-container ${isSelected ? 'selected' : ''} 
-                                          ${!canSelect ? 'disabled' : ''} 
-                                          ${isFromBottom ? 'from-bottom' : ''}`}
-                                onClick={() => handleCardSelect(card)}
+                                          ${!canSelect ? 'disabled' : ''}`}
+                                onClick={() => {
+                                    handleCardSelect(card);
+                                    handleCardInteraction(card);
+                                }}
+                                onMouseEnter={() => handleCardInteraction(card)}
                             >
                                 <Card 
                                     suit={card.suit}
                                     value={card.value}
-                                    className="player-card"
+                                    className={`player-card ${isFromBottom && !hasInteracted ? 'from-bottom' : ''}`}
                                 />
                             </div>
                         );
