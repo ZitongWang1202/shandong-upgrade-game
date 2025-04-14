@@ -131,7 +131,7 @@ const LobbyPage = () => {
             </Tooltip>
             <Tooltip label="抠底测试：对家叫主后进入抠底阶段" hasArrow>
               <Button
-                colorScheme="teal"
+                colorScheme="yellow"
                 onClick={createBottomTestGame}
               >
                 抠底测试

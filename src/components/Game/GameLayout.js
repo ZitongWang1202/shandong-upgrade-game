@@ -409,13 +409,20 @@ function GameLayout() {
         // 原有的选牌逻辑
         if (!cardSelectionValidator) return;
 
-        const isCardSelected = selectedCards.some(
-            c => c.suit === card.suit && c.value === card.value
-        );
+        // 使用索引来找到完全相同的卡牌对象
+        const cardIndex = playerCards.findIndex(c => c === card);
+        const isCardSelected = selectedCards.some(c => {
+            const selectedIndex = playerCards.findIndex(pc => pc === c);
+            return selectedIndex === cardIndex;
+        });
 
         if (isCardSelected) {
+            // 取消选中 - 使用索引来确保只取消特定的那张牌
             setSelectedCards(prev => 
-                prev.filter(c => !(c.suit === card.suit && c.value === card.value))
+                prev.filter(c => {
+                    const selectedIndex = playerCards.findIndex(pc => pc === c);
+                    return selectedIndex !== cardIndex;
+                })
             );
         } else {
             if (cardSelectionValidator(card, selectedCards)) {
@@ -831,17 +838,24 @@ function GameLayout() {
         }
     };
 
-    // 添加处理选择底牌的函数
+    // 修改底牌选择函数
     const handleBottomCardSelect = (card) => {
         if (!isBottomDealer) return;
 
-        const isSelected = selectedBottomCards.some(
-            c => c.suit === card.suit && c.value === card.value
-        );
+        // 使用索引来找到完全相同的卡牌对象
+        const cardIndex = playerCards.findIndex(c => c === card);
+        const isSelected = selectedBottomCards.some(c => {
+            const selectedIndex = playerCards.findIndex(pc => pc === c);
+            return selectedIndex === cardIndex;
+        });
 
         if (isSelected) {
+            // 取消选中 - 使用索引来确保只取消特定的那张牌
             setSelectedBottomCards(prev => 
-                prev.filter(c => !(c.suit === card.suit && c.value === card.value))
+                prev.filter(c => {
+                    const selectedIndex = playerCards.findIndex(pc => pc === c);
+                    return selectedIndex !== cardIndex;
+                })
             );
         } else if (selectedBottomCards.length < 4) {
             setSelectedBottomCards(prev => [...prev, card]);
@@ -853,7 +867,9 @@ function GameLayout() {
         if (card.isFromBottom) {
             setInteractedBottomCards(prev => {
                 const newSet = new Set(prev);
-                newSet.add(`${card.suit}-${card.value}`);
+                // 使用索引确保每张牌的唯一性
+                const cardIndex = playerCards.findIndex(c => c === card);
+                newSet.add(`${card.suit}-${card.value}-${cardIndex}`);
                 return newSet;
             });
         }
@@ -1069,8 +1085,16 @@ function GameLayout() {
                     {playerCards.map((card, index) => {
                         const isSelected = 
                             (gamePhase === 'bottomDeal' && isBottomDealer)
-                                ? selectedBottomCards.some(c => c.suit === card.suit && c.value === card.value)
-                                : selectedCards.some(c => c.suit === card.suit && c.value === card.value);
+                                ? selectedBottomCards.some(c => {
+                                    const selectedIndex = playerCards.findIndex(pc => pc === c);
+                                    const currentIndex = playerCards.findIndex(pc => pc === card);
+                                    return selectedIndex === currentIndex;
+                                  })
+                                : selectedCards.some(c => {
+                                    const selectedIndex = playerCards.findIndex(pc => pc === c);
+                                    const currentIndex = playerCards.findIndex(pc => pc === card);
+                                    return selectedIndex === currentIndex;
+                                  });
                         
                         const canSelect = 
                             (gamePhase === 'bottomDeal' && isBottomDealer)
@@ -1080,7 +1104,7 @@ function GameLayout() {
                         // 修改底牌检测逻辑
                         const isFromBottom = card.isFromBottom && 
                             cardsFromBottom.includes(`${card.suit}-${card.value}`);
-                        const hasInteracted = interactedBottomCards.has(`${card.suit}-${card.value}`);
+                        const hasInteracted = interactedBottomCards.has(`${card.suit}-${card.value}-${index}`); // 添加索引确保唯一性
                         
                         return (
                             <div 
