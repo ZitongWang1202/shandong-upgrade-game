@@ -102,7 +102,435 @@ function GameLayout() {
     // 在 GameLayout.js 中添加新的状态
     const [isMyTurn, setIsMyTurn] = useState(false);
     const [currentPlayer, setCurrentPlayer] = useState(null);
+    const [isFirstPlayerInRound, setIsFirstPlayerInRound] = useState(false);
 
+    // 定义牌型常量
+    const CARD_PATTERN = {
+        SINGLE: 'SINGLE',         // 单张
+        PAIR: 'PAIR',             // 对子
+        CONSECUTIVE_PAIRS: 'CONSECUTIVE_PAIRS', // 连对
+        FLASH: 'FLASH',           // 闪
+        THUNDER: 'THUNDER',       // 震
+        RAIN: 'RAIN'              // 雨
+    };
+
+    // 添加处理抠底的函数
+    const handleConfirmBottomDeal = () => {
+        if (selectedBottomCards.length === 4) {
+            socket.emit('confirmBottomDeal', {
+                roomId: localStorage.getItem('roomId'),
+                putCards: selectedBottomCards
+            });
+            
+            // 清理相关状态
+            setSelectedBottomCards([]);
+            setIsBottomDealer(false);
+            setBottomDealTimeLeft(null);
+            setCardsFromBottom([]);  // 清除底牌高亮
+        }
+    };
+
+    // 修改底牌选择函数
+    const handleBottomCardSelect = (card) => {
+        if (!isBottomDealer) return;
+
+        // 使用索引来找到完全相同的卡牌对象
+        const cardIndex = playerCards.findIndex(c => c === card);
+        const isSelected = selectedBottomCards.some(c => {
+            const selectedIndex = playerCards.findIndex(pc => pc === c);
+            return selectedIndex === cardIndex;
+        });
+
+        if (isSelected) {
+            // 取消选中 - 使用索引来确保只取消特定的那张牌
+            setSelectedBottomCards(prev => 
+                prev.filter(c => {
+                    const selectedIndex = playerCards.findIndex(pc => pc === c);
+                    return selectedIndex !== cardIndex;
+                })
+            );
+        } else if (selectedBottomCards.length < 4) {
+            setSelectedBottomCards(prev => [...prev, card]);
+        }
+    };
+
+    // 修改卡牌点击或悬浮的处理函数
+    const handleCardInteraction = (card) => {
+        if (card.isFromBottom) {
+            setInteractedBottomCards(prev => {
+                const newSet = new Set(prev);
+                // 使用索引确保每张牌的唯一性
+                const cardIndex = playerCards.findIndex(c => c === card);
+                newSet.add(`${card.suit}-${card.value}-${cardIndex}`);
+                return newSet;
+            });
+        }
+    };
+
+    // 修改 handlePlayCards 函数，在这里进行最终验证 (这个函数之前已经修改过)
+    const handlePlayCards = () => {
+        if (selectedCards.length > 0 && isMyTurn) {
+            
+            console.log("Attempting to play cards:", selectedCards);
+
+            // --- 在这里添加最终的牌型验证 ---
+            // 领出验证
+            if (isFirstPlayerInRound) {
+                console.log("Final validation for first player");
+                if (!isValidCardPattern(selectedCards, mainSuit, commonMain)) {
+                    console.error("出牌失败：领出牌不构成有效牌型");
+                    alert("出牌失败：领出牌不构成有效牌型"); 
+                    return; 
+                }
+                console.log("First player pattern is valid.");
+            } 
+            // 跟牌验证
+            else {
+                 console.log("Final validation for following player");
+                // TODO: 实现跟牌验证逻辑 
+                // 1. 检查牌数是否与领出者一致
+                // const leadingPlay = roundCards?.[0]; 
+                // if (leadingPlay && selectedCards.length !== leadingPlay.cards.length) {
+                //    console.error(`出牌失败：需要出 ${leadingPlay.cards.length} 张牌`);
+                //    alert(`出牌失败：需要出 ${leadingPlay.cards.length} 张牌`);
+                //    return;
+                // }
+                // 2. 检查是否符合跟牌规则（花色、大小等）
+                console.warn("跟牌验证逻辑未完全实现");
+            }
+
+            // 发送出牌事件到服务器
+             console.log("Validation passed, emitting playCards event");
+            socket.emit('playCards', {
+                roomId: localStorage.getItem('roomId'),
+                cards: selectedCards
+            });
+            
+            // 清理选中状态
+            setSelectedCards([]);
+            setIsMyTurn(false); // 出牌后，设置自己不是当前回合
+        }
+    };
+
+    // 检查是否是同花色对子
+    const isSameSuitPair = (cards) => {
+        if (cards.length !== 2) return false;
+        return cards[0].suit === cards[1].suit && cards[0].value === cards[1].value;
+    };
+
+    // 辅助函数：获取主牌的等级（数值越大等级越高）判断主牌的连对
+    const getMainCardRank = (value, suit, mainSuit, commonMain) => {
+        // 1. 大小王 (暂不处理，因为连对通常不包含王)
+        if (suit === 'JOKER') return -1; // 王不参与普通连对排名
+
+        // 2. 当前常主
+        if (value === commonMain) {
+            return suit === mainSuit ? 20 : 19; // 主花色常主(20) > 副花色常主(19)
+        }
+
+        // 3. 固定常主 (5, 3, 2)
+        const fixedCommonValues = ['5', '3', '2'];
+        if (fixedCommonValues.includes(value)) {
+            // 基础分: 5(15), 3(13), 2(11)
+            const baseRank = 15 - fixedCommonValues.indexOf(value) * 2; 
+            return suit === mainSuit ? baseRank : baseRank - 1; // 主花色(15/13/11) > 副花色(14/12/10)
+        }
+
+        // 4. 普通主牌 (A, K, Q, ..., 4) - 必须是主花色
+        if (suit === mainSuit) {
+            const normalValues = ['4', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']; // A最大(9), 4最小(0)
+            const index = normalValues.indexOf(value);
+            if (index !== -1) {
+                return index; // 排名 0 到 9
+            }
+        }
+        
+        // 如果不是主牌，返回最低等级
+        return -1; 
+    };
+
+    // 检查是否是连对
+    const isConsecutivePairs = (cards, mainSuit, commonMain) => {
+        if (cards.length < 4 || cards.length % 2 !== 0) return false;
+
+        // 1. 按点数分组，并检查每个点数是否能形成同花色对子
+        const valueGroups = {};
+        cards.forEach(card => {
+            if (!valueGroups[card.value]) {
+                valueGroups[card.value] = [];
+            }
+            valueGroups[card.value].push(card);
+        });
+
+        const pairDetails = []; // 存储每个有效对子的信息 { value: '5', suit: 'HEARTS', isMain: true }
+        let category = null; // 'main' 或 一个副牌花色 suit
+        let isValid = true;
+
+        for (const value in valueGroups) {
+            const cardsWithValue = valueGroups[value];
+            
+            // a. 检查数量是否为偶数
+            if (cardsWithValue.length % 2 !== 0) {
+                console.log(`连对检查失败：点数 ${value} 数量不是偶数`);
+                isValid = false;
+                break;
+            }
+
+            // b. 检查这些牌是否能组成同花色对子
+            const suitCounts = {};
+            cardsWithValue.forEach(card => {
+                suitCounts[card.suit] = (suitCounts[card.suit] || 0) + 1;
+            });
+            // 每个花色的数量也必须是偶数
+            if (Object.values(suitCounts).some(count => count % 2 !== 0)) {
+                 console.log(`连对检查失败：点数 ${value} 包含不成对的花色牌`);
+                isValid = false;
+                break;
+            }
+
+            // c. 记录这些对子的信息，并检查类别一致性
+            for (const suit in suitCounts) {
+                // suitCounts[suit] 保证是偶数
+                const numPairs = suitCounts[suit] / 2;
+                const representativeCard = cardsWithValue.find(c => c.suit === suit); // 找这个花色的代表牌
+                const isMain = isMainCard(representativeCard, mainSuit, commonMain);
+                const currentPairCategory = isMain ? 'main' : suit;
+
+                if (category === null) {
+                    category = currentPairCategory; // 设定整体牌型类别
+                } else if (category !== currentPairCategory) {
+                    console.log(`连对检查失败：混合了不同类型的对子 (${category} 和 ${currentPairCategory})`);
+                    isValid = false;
+                    break; // 跳出内层循环
+                }
+                
+                // 为这个花色添加 N 个对子信息
+                for (let i = 0; i < numPairs; i++) {
+                    pairDetails.push({ value, suit, isMain });
+                }
+            }
+            if (!isValid) break; // 跳出外层循环
+        }
+
+        if (!isValid || category === null || pairDetails.length < 2) { // 至少需要两对
+            return false;
+        }
+
+        // 2. 判断连续性 (基于确定的唯一类别 category)
+        // Case 1: 全是主牌对
+        if (category === 'main') {
+            // 按主牌等级排序 (pairDetails 包含了所有对子，可能有重复点数但不同花色的主牌对)
+            pairDetails.sort((a, b) => {
+                return getMainCardRank(a.value, a.suit, mainSuit, commonMain) - 
+                       getMainCardRank(b.value, b.suit, mainSuit, commonMain);
+            });
+
+            // 检查主牌等级是否连续 (比较相邻对子的等级)
+            for (let i = 1; i < pairDetails.length; i++) {
+                const rankPrev = getMainCardRank(pairDetails[i-1].value, pairDetails[i-1].suit, mainSuit, commonMain);
+                const rankCurr = getMainCardRank(pairDetails[i].value, pairDetails[i].suit, mainSuit, commonMain);
+                
+                if (rankCurr - rankPrev !== 1) {
+                    console.log(`主牌连对检查失败：等级 ${rankPrev} (${pairDetails[i-1].value}) 和 ${rankCurr} (${pairDetails[i].value}) 不连续`);
+                    return false;
+                }
+            }
+            console.log("主牌连对检查成功");
+            return true; // 主牌等级连续
+        }
+        // Case 2: 全是同一种副牌对 (category 就是那个副牌花色)
+        else {
+            const normalValues = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+            // 按数字顺序排序 (只需要点数)
+            // 先去重，因为可能有多个相同点数的对子（例如两对副牌K）
+            const uniquePairValues = [...new Set(pairDetails.map(p => p.value))];
+            uniquePairValues.sort((a, b) => normalValues.indexOf(a) - normalValues.indexOf(b));
+
+            // 检查数字索引是否连续
+            for (let i = 1; i < uniquePairValues.length; i++) {
+                const prevIndex = normalValues.indexOf(uniquePairValues[i - 1]);
+                const currIndex = normalValues.indexOf(uniquePairValues[i]);
+                if (currIndex === -1 || prevIndex === -1 || currIndex - prevIndex !== 1) {
+                     console.log(`副牌连对检查失败：${uniquePairValues[i-1]} (index ${prevIndex}) 和 ${uniquePairValues[i]} (index ${currIndex}) 不连续`);
+                    return false;
+                }
+            }
+             console.log("副牌连对检查成功");
+            return true; // 副牌数字连续
+        }
+    };
+
+    // 检查是否是闪
+    const isFlash = useCallback((cards, mainSuit, commonMain) => {
+        // 1. 必须正好 4 张牌
+        if (!cards || cards.length !== 4) return false;
+
+        // 2. 4 张牌的点数必须相同
+        const value = cards[0].value;
+        if (!cards.every(card => card.value === value)) return false;
+
+        // 3. 这个点数必须是 '2', '3', '5' 或当前的 commonMain
+        const validFlashValues = ['2', '3', '5'];
+        if (commonMain) { // 确保 commonMain 不是 null 或 undefined
+             validFlashValues.push(commonMain);
+        }
+        if (!validFlashValues.includes(value)) {
+             console.log(`闪检查：点数 ${value} 不是 2, 3, 5 或常主 ${commonMain}`);
+             return false;
+        }
+            
+        // 4. 4 张牌花色必须各不相同
+        const suits = new Set(cards.map(card => card.suit));
+        if (suits.size !== 4) return false;
+
+        // 如果以上都满足，则是闪
+        return true;
+    }, []); // 依赖项可能需要 commonMain
+
+    // 检查是否是震
+    const isThunder = useCallback((cards, mainSuit, commonMain) => {
+        // 1. 必须多于 4 张牌
+        if (!cards || cards.length <= 4) return false;
+
+        // 2. 所有牌的点数必须相同
+        const value = cards[0].value;
+        if (!cards.every(card => card.value === value)) return false;
+
+        // 3. 这个点数必须是 '2', '3', '5' 或当前的 commonMain
+        const validThunderValues = ['2', '3', '5'];
+         if (commonMain) { // 确保 commonMain 不是 null 或 undefined
+             validThunderValues.push(commonMain);
+         }
+        if (!validThunderValues.includes(value)) {
+             console.log(`震检查：点数 ${value} 不是 2, 3, 5 或常主 ${commonMain}`);
+            return false;
+        }
+
+        // 4. 这些牌中必须包含 4 种不同的花色
+        const uniqueSuits = new Set(cards.map(card => card.suit));
+        if (uniqueSuits.size !== 4) {
+             console.log(`震检查：点数 ${value} 的牌中包含的花色种类 (${uniqueSuits.size}) 不等于 4`);
+             return false;
+        }
+        
+        // 如果以上都满足，则是震
+        return true;
+    }, []); // 依赖项可能需要 commonMain
+
+    // 检查是否是雨 - 花色相同，数字连续五张以上的牌型
+    const isRain = (cards) => {
+        if (cards.length < 5) return false;
+
+        // 检查花色是否相同
+        const suit = cards[0].suit;
+        if (!cards.every(card => card.suit === suit)) return false;
+
+        // 对牌值进行分组
+        const valueGroups = {};
+        cards.forEach(card => {
+            if (!valueGroups[card.value]) valueGroups[card.value] = [];
+            valueGroups[card.value].push(card);
+        });
+
+        // 检查是否有连续的五张或以上的牌
+        const normalValues = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+        const values = Object.keys(valueGroups).sort(
+            (a, b) => normalValues.indexOf(a) - normalValues.indexOf(b)
+        );
+
+        // 检查连续性
+        let consecutiveCount = 1;
+        for (let i = 1; i < values.length; i++) {
+            const prevIndex = normalValues.indexOf(values[i - 1]);
+            const currIndex = normalValues.indexOf(values[i]);
+            if (currIndex - prevIndex === 1) {
+                consecutiveCount++;
+            } else {
+                consecutiveCount = 1;
+            }
+            if (consecutiveCount >= 5) return true;
+        }
+
+        return false;
+    };
+
+    // 判断一张牌是否是主牌
+    const isMainCard = (card, mainSuit, commonMain) => {
+        // 大小王是主牌
+        if (card.suit === 'JOKER') return true;
+        
+        // 主花色的牌是主牌
+        if (card.suit === mainSuit) return true;
+        
+        // 常主牌是主牌
+        if (card.value === commonMain) return true;
+        
+        // 固定常主2、3、5是主牌
+        if (['2', '3', '5'].includes(card.value)) return true;
+        
+        return false;
+    };
+
+
+    // 最终的牌型验证函数 - 调整顺序
+    const isValidCardPattern = useCallback((cards, mainSuit, commonMain) => {
+        if (!cards || cards.length === 0) return false; // 0 张牌
+        
+        // 1. 单张
+        if (cards.length === 1) return true; 
+        
+        // 2. 对子
+        if (cards.length === 2) return isSameSuitPair(cards); 
+        
+        // --- 针对 4 张牌的特殊处理 ---
+        if (cards.length === 4) {
+            // a. 优先检查是否是 闪
+            if (isFlash(cards, mainSuit, commonMain)) {
+                 console.log("判断为：闪");
+                 return true;
+            }
+            // b. 如果不是闪，再检查是否是 连对 (两对牌的情况)
+            if (isConsecutivePairs(cards, mainSuit, commonMain)) {
+                console.log("判断为：连对 (4张)");
+                return true;
+            }
+            // 如果4张牌既不是闪也不是连对，则不是有效牌型
+            console.log("4张牌既不是闪也不是连对");
+            return false; 
+        }
+        
+        // --- 处理其他牌数 ---
+        
+        // 3. 连对 (牌数 > 4 且为偶数)
+        if (cards.length > 4 && cards.length % 2 === 0) { 
+            if (isConsecutivePairs(cards, mainSuit, commonMain)) {
+                console.log("判断为：连对 (>4张)");
+                return true;
+            }
+        }
+
+        // 4. 震 (牌数 > 4) - 根据新规则，震牌数 > 4
+        if (cards.length > 4) { 
+            if (isThunder(cards, mainSuit, commonMain)) {
+                 console.log("判断为：震");
+                 return true;
+            }
+        }
+
+        // 5. 雨 (牌数 >= 5)
+        if (cards.length >= 5) {
+            if (isRain(cards)) {
+                console.log("判断为：雨");
+                return true;
+            }
+        }
+        
+        // 如果以上都不是
+        console.log(`未匹配任何有效牌型 (牌数: ${cards.length})`);
+        return false;
+    }, [isSameSuitPair, isFlash, isConsecutivePairs, isThunder, isRain, mainSuit, commonMain]); // 依赖项可能需要加上 mainSuit, commonMain
+
+    
     // 卡牌选择验证器对象
     const validators = useMemo(() => ({
         stickPhase: (card, currentSelected) => {
@@ -118,25 +546,74 @@ function GameLayout() {
             return card.suit === mainSuit && currentSelected.length < 3;
         },
         gaming: (card, currentSelected) => {
-            // 添加调试日志
             console.log('Gaming validator called with:', {
                 isMyTurn,
+                isFirstPlayerInRound,
                 card,
-                currentSelectedLength: currentSelected.length
+                currentSelectedLength: currentSelected.length,
+                // roundCardsLength: roundCards?.length // 假设有 roundCards 状态
             });
             
-            // 如果不是自己的回合，不能出牌
+            // 如果不是自己的回合，不能选牌
             if (!isMyTurn) {
                 console.log('Cannot select card: not my turn');
                 return false;
             }
-            
-            // 在游戏初期，简单实现为允许选择任意牌，最多3张
-            const canSelect = currentSelected.length < 3;
-            console.log('Can select card:', canSelect);
-            return canSelect;
+
+            // --- 领出时的验证 ---
+            if (isFirstPlayerInRound) {
+                console.log('Validating for first player');
+                // 总是允许选择第一张牌
+                if (currentSelected.length === 0) {
+                     console.log('Allowing selection of first card');
+                    return true; 
+                }
+                
+                // 检查加入这张牌后，当前选中的牌是否构成一个有效的牌型
+                // 注意：这可能过于严格，不允许玩家逐步构建复杂牌型（如拖拉机）
+                // 更好的方法可能是检查是否 *可能* 构成有效牌型，但这更复杂
+                const potentialSelection = [...currentSelected, card];
+                const isValid = isValidCardPattern(potentialSelection, mainSuit, commonMain);
+                
+                if (isValid) {
+                    console.log('Potential selection is a valid pattern:', potentialSelection);
+                    return true;
+                } else {
+                    // 如果当前组合无效，我们可能需要更复杂的逻辑判断是否还能加牌
+                    // 例如：如果已选是对子，允许再选构成连对的牌
+                    // 暂时采取严格模式：只有当前选中构成有效牌型才允许继续添加（这其实不太对）
+                    
+                    // --- 修正：更宽松的检查 ---
+                    // 允许选择，只要有可能形成牌型。
+                    // 过于复杂的逻辑，暂时简化：允许选择，最终在 handlePlayCards 验证
+                    console.log('Potential selection is NOT a valid pattern, but allowing selection for now.');
+                    // return false; // 严格模式下会阻止
+                    return true; // 暂时允许选择，依赖最终出牌验证
+                }
+            } 
+            // --- 跟牌时的验证 ---
+            else {
+                console.log('Validating for following player');
+                // 需要获取领出玩家出的牌信息，特别是数量
+                // const leadingPlay = roundCards?.[0]; // 假设 roundCards 存在且包含上一轮信息
+                // if (!leadingPlay) {
+                //     console.error("无法获取领出信息，无法验证跟牌");
+                //     return false; // 或者允许选择，依赖最终验证
+                // }
+                
+                // // 基础检查：不允许选择超过领出数量的牌
+                // if (currentSelected.length >= leadingPlay.cards.length) {
+                //     console.log('Cannot select more cards than leading play');
+                //     return false;
+                // }
+
+                // TODO: 实现更复杂的跟牌验证逻辑（如花色、大小）
+                console.log('Follow play validation in validator is basic. Allowing selection.');
+                return true; // 暂时允许选择，依赖最终出牌验证
+            }
         }
-    }), [isMyTurn, commonMain, mainSuit]);
+        // 依赖项需要包括所有用到的状态
+    }), [isMyTurn, isFirstPlayerInRound, commonMain, mainSuit, isValidCardPattern /*, roundCards */]); 
 
     // 计算牌的权重（用于排序）
     const getCardWeight = useCallback((card) => {
@@ -779,6 +1256,10 @@ function GameLayout() {
             const isCurrentPlayerTurn = data.player === socket.id;
             console.log('Is current player turn:', isCurrentPlayerTurn, 'socket.id:', socket.id);
             setIsMyTurn(isCurrentPlayerTurn);
+            
+            // 修改这一行，使用服务器发送的 isFirstPlayer 字段
+            setIsFirstPlayerInRound(data.player === socket.id && data.isFirstPlayer);
+            console.log('isFirstPlayerInRound set to:', data.player === socket.id && data.isFirstPlayer);
         });
         
         // 监听其他玩家出牌
@@ -790,11 +1271,13 @@ function GameLayout() {
         // 监听轮次结束
         socket.on('roundEnd', (data) => {
             console.log(`本轮结束，玩家 ${data.winner} 获胜`);
-            // TODO: 显示本轮结果
             
             // 如果下一个出牌的是自己
             if (data.nextPlayer === socket.id) {
                 setIsMyTurn(true);
+                setIsFirstPlayerInRound(true); // 添加这一行，因为轮次结束后的首个出牌玩家是第一个出牌者
+            } else {
+                setIsFirstPlayerInRound(false); // 添加这一行
             }
         });
         
@@ -917,74 +1400,6 @@ function GameLayout() {
             return () => clearInterval(intervalId);
         }
     }, [bottomDealDeadline]);
-
-    // 添加处理抠底的函数
-    const handleConfirmBottomDeal = () => {
-        if (selectedBottomCards.length === 4) {
-            socket.emit('confirmBottomDeal', {
-                roomId: localStorage.getItem('roomId'),
-                putCards: selectedBottomCards
-            });
-            
-            // 清理相关状态
-            setSelectedBottomCards([]);
-            setIsBottomDealer(false);
-            setBottomDealTimeLeft(null);
-            setCardsFromBottom([]);  // 清除底牌高亮
-        }
-    };
-
-    // 修改底牌选择函数
-    const handleBottomCardSelect = (card) => {
-        if (!isBottomDealer) return;
-
-        // 使用索引来找到完全相同的卡牌对象
-        const cardIndex = playerCards.findIndex(c => c === card);
-        const isSelected = selectedBottomCards.some(c => {
-            const selectedIndex = playerCards.findIndex(pc => pc === c);
-            return selectedIndex === cardIndex;
-        });
-
-        if (isSelected) {
-            // 取消选中 - 使用索引来确保只取消特定的那张牌
-            setSelectedBottomCards(prev => 
-                prev.filter(c => {
-                    const selectedIndex = playerCards.findIndex(pc => pc === c);
-                    return selectedIndex !== cardIndex;
-                })
-            );
-        } else if (selectedBottomCards.length < 4) {
-            setSelectedBottomCards(prev => [...prev, card]);
-        }
-    };
-
-    // 修改卡牌点击或悬浮的处理函数
-    const handleCardInteraction = (card) => {
-        if (card.isFromBottom) {
-            setInteractedBottomCards(prev => {
-                const newSet = new Set(prev);
-                // 使用索引确保每张牌的唯一性
-                const cardIndex = playerCards.findIndex(c => c === card);
-                newSet.add(`${card.suit}-${card.value}-${cardIndex}`);
-                return newSet;
-            });
-        }
-    };
-
-    // 修改 handlePlayCards 函数
-    const handlePlayCards = () => {
-        if (selectedCards.length > 0 && isMyTurn) {
-            // 发送出牌事件到服务器
-            socket.emit('playCards', {
-                roomId: localStorage.getItem('roomId'),
-                cards: selectedCards
-            });
-            
-            // 清理选中状态
-            setSelectedCards([]);
-            setIsMyTurn(false);
-        }
-    };
 
     // 渲染界面
     return (
@@ -1398,6 +1813,20 @@ function GameLayout() {
                         出牌
                     </Button>
                 </VStack>
+            )}
+
+            {/* 添加新的日志打印 */}
+            {gamePhase === 'playing' && (
+                <Text mt={4} textAlign="center" color="gray.500">
+                    游戏状态: {JSON.stringify({
+                        gamePhase,
+                        isMyTurn,
+                        isFirstPlayerInRound,
+                        cardSelectionValidator: !!cardSelectionValidator,
+                        socket_id: socket.id,
+                        currentPlayer
+                    })}
+                </Text>
             )}
         </Box>
     );
