@@ -10,7 +10,8 @@ import {
     MenuItem,
     Text,
     Progress,
-    VStack
+    VStack,
+    Spinner // <-- Import Spinner if adding loading state
 } from '@chakra-ui/react';
 import Card from './Card';
 import GameInfo from './GameInfo';
@@ -104,6 +105,10 @@ function GameLayout() {
     const [currentPlayer, setCurrentPlayer] = useState(null);
     const [isFirstPlayerInRound, setIsFirstPlayerInRound] = useState(false);
 
+    const [playersInfo, setPlayersInfo] = useState([]); // 存储所有玩家信息 [{id, name, position}]
+    const [playedCardsInfo, setPlayedCardsInfo] = useState({}); // { playerId1: [cards...], playerId2: [cards...] }
+    const [isLoadingPlayers, setIsLoadingPlayers] = useState(true); // <-- 添加加载状态
+
     // 定义牌型常量
     const CARD_PATTERN = {
         SINGLE: 'SINGLE',         // 单张
@@ -122,11 +127,11 @@ function GameLayout() {
                 putCards: selectedBottomCards
             });
             
-            // 清理相关状态
-            setSelectedBottomCards([]);
+            // 立即清除本地状态以提供快速反馈
+            setSelectedBottomCards([]); 
             setIsBottomDealer(false);
             setBottomDealTimeLeft(null);
-            setCardsFromBottom([]);  // 清除底牌高亮
+            setCardsFromBottom([]);  
         }
     };
 
@@ -546,26 +551,22 @@ function GameLayout() {
             return card.suit === mainSuit && currentSelected.length < 3;
         },
         gaming: (card, currentSelected) => {
-            console.log('Gaming validator called with:', {
-                isMyTurn,
-                isFirstPlayerInRound,
-                card,
-                currentSelectedLength: currentSelected.length,
-                // roundCardsLength: roundCards?.length // 假设有 roundCards 状态
-            });
+            // console.log('Gaming validator called with:', { // 注释掉或删除
+            //     isMyTurn,
+            //     isFirstPlayerInRound,
+            //     card,
+            //     currentSelectedLength: currentSelected.length,
+            // });
             
-            // 如果不是自己的回合，不能选牌
             if (!isMyTurn) {
-                console.log('Cannot select card: not my turn');
+                // console.log('Cannot select card: not my turn'); // 注释掉或删除
                 return false;
             }
 
-            // --- 领出时的验证 ---
             if (isFirstPlayerInRound) {
-                console.log('Validating for first player');
-                // 总是允许选择第一张牌
+                // console.log('Validating for first player'); // 注释掉或删除
                 if (currentSelected.length === 0) {
-                     console.log('Allowing selection of first card');
+                    //  console.log('Allowing selection of first card'); // 注释掉或删除
                     return true; 
                 }
                 
@@ -576,19 +577,11 @@ function GameLayout() {
                 const isValid = isValidCardPattern(potentialSelection, mainSuit, commonMain);
                 
                 if (isValid) {
-                    console.log('Potential selection is a valid pattern:', potentialSelection);
+                    // console.log('Potential selection is a valid pattern:', potentialSelection); // 注释掉或删除
                     return true;
                 } else {
-                    // 如果当前组合无效，我们可能需要更复杂的逻辑判断是否还能加牌
-                    // 例如：如果已选是对子，允许再选构成连对的牌
-                    // 暂时采取严格模式：只有当前选中构成有效牌型才允许继续添加（这其实不太对）
-                    
-                    // --- 修正：更宽松的检查 ---
-                    // 允许选择，只要有可能形成牌型。
-                    // 过于复杂的逻辑，暂时简化：允许选择，最终在 handlePlayCards 验证
-                    console.log('Potential selection is NOT a valid pattern, but allowing selection for now.');
-                    // return false; // 严格模式下会阻止
-                    return true; // 暂时允许选择，依赖最终出牌验证
+                    // console.log('Potential selection is NOT a valid pattern, but allowing selection for now.'); // 注释掉或删除
+                    return true; 
                 }
             } 
             // --- 跟牌时的验证 ---
@@ -750,8 +743,8 @@ function GameLayout() {
         setCanFixMain(jokerCount >= 2 && preGameState.canStealMain && !isMainFixed);
     }, [playerCards, preGameState.canStealMain, isMainFixed]);
 
-    // 添加新的函数来检查是否可以反主
-    const checkCanCounterMain = () => {
+    // 添加 useCallback 包装
+    const checkCanCounterMain = useCallback(() => {
         // 检查是否有两张相同的王和一对牌
         const hasBigJokerPair = hasJokerPair('BIG');
         const hasSmallJokerPair = hasJokerPair('SMALL');
@@ -761,7 +754,9 @@ function GameLayout() {
                        Object.values(getPairs('CLUBS')).length > 0;
         
         setCanCounterMain((hasBigJokerPair || hasSmallJokerPair) && hasPair);
-    };
+    // 添加依赖项：它依赖的函数 hasJokerPair 和 getPairs
+    // 这两个函数本身也应该用 useCallback 包裹，并依赖 playerCards
+    }, [hasJokerPair, getPairs]); 
 
     // 处理反主
     const handleCounterMain = () => {
@@ -896,8 +891,25 @@ function GameLayout() {
 
     // 修改通用的卡牌选择处理函数
     const handleCardSelect = (card) => {
-        console.log('Card clicked:', card, 'gamePhase:', gamePhase, 'isMyTurn:', isMyTurn);
-        
+        console.log('[选牌检查] 点击的牌:', card);
+        console.log('[选牌检查] 当前状态:', { 
+            gamePhase, 
+            isMyTurn, 
+            isBottomDealer, 
+            cardSelectionValidator: typeof cardSelectionValidator, 
+            isFirstPlayerInRound 
+        });
+        // --- 添加日志 ---
+        console.log('[选牌检查] 点击的牌:', card);
+        console.log('[选牌检查] 当前状态:', { 
+            gamePhase, 
+            isMyTurn, 
+            isBottomDealer, 
+            cardSelectionValidator: typeof cardSelectionValidator, // 检查验证器类型
+            isFirstPlayerInRound
+        });
+        // ---------------
+
         // 如果是抠底阶段
         if (gamePhase === 'bottomDeal' && isBottomDealer) {
             handleBottomCardSelect(card);
@@ -906,12 +918,20 @@ function GameLayout() {
 
         // 出牌阶段
         if (gamePhase === 'playing') {
-            console.log('In playing phase, validator:', cardSelectionValidator ? 'exists' : 'null');
+            // console.log('In playing phase, validator:', cardSelectionValidator ? 'exists' : 'null'); // 这个日志可以保留或移除
+        } else {
+            // --- 添加日志 ---
+             console.log(`[选牌检查] 游戏阶段 (${gamePhase}) 不是 playing，无法选牌`);
+            // ---------------
+            return; // 如果不是 playing 阶段，直接返回
         }
+
 
         // 原有的选牌逻辑
         if (!cardSelectionValidator) {
-            console.log('No card selection validator');
+             // --- 添加日志 ---
+            console.log('[选牌检查] 卡牌选择验证器 (cardSelectionValidator) 不存在，无法选牌');
+             // ---------------
             return;
         }
 
@@ -943,22 +963,25 @@ function GameLayout() {
         }
     };
 
-    // 修改进入粘牌阶段的逻辑
+    // 修改进入粘牌/游戏阶段的逻辑 - 调整依赖项
     useEffect(() => {
-        if (gamePhase === 'stickPhase') {
-            setMaxSelectableCards(3);
-            setCardSelectionValidator(() => validators.stickPhase);
-        } else if (gamePhase === 'playing') {
-            setMaxSelectableCards(3);
-            setCardSelectionValidator(() => validators.gaming);
-        } else if (gamePhase === 'gaming') {
-            setMaxSelectableCards(3);
-            setCardSelectionValidator(() => validators.gaming);
-        } else {
+        console.log(`[Effect 验证器检查] Effect Update Validator Runs - gamePhase: ${gamePhase}`);
+        const stickValidator = validators.stickPhase;
+        const gamingValidator = validators.gaming;
+
+        if (gamePhase === 'stickPhase') { /* ... */ } 
+        else if (gamePhase === 'playing' || gamePhase === 'gaming') { 
+            console.log("[Effect 验证器检查] 正在设置 validator to gamingValidator"); // 添加日志
+            setMaxSelectableCards(100); 
+            setCardSelectionValidator(() => gamingValidator); // 确认这行被执行
+            console.log("[Effect 验证器检查] setCardSelectionValidator 已调用 (设置为 gaming)"); // 添加日志
+        } else { 
+            console.log("[Effect 验证器检查] 正在设置 validator to null"); // 添加日志
             setMaxSelectableCards(0);
             setCardSelectionValidator(null);
+             console.log("[Effect 验证器检查] setCardSelectionValidator 已调用 (设置为 null)"); // 添加日志
         }
-    }, [gamePhase, mainSuit, commonMain, validators]);
+    }, [gamePhase, mainSuit, commonMain, validators]); // 保持这个依赖项，因为内部访问了 validators
 
     // 修改确认交换的处理函数
     const handleConfirmStickCards = () => {
@@ -1133,7 +1156,6 @@ function GameLayout() {
             
             // 反主后的状态处理
             setShowFixButton(false);  // 隐藏加固按钮
-            setCanFixMain(false);     // 禁用加固功能
             setStealMainDeadline(null); // 清除反主/加固截止时间
             setStealMainTimeLeft(null); // 清除倒计时显示
             
@@ -1206,7 +1228,7 @@ function GameLayout() {
         // 监听抠底错误
         socket.on('bottomDealError', ({ message }) => {
             // 这里可以添加错误提示
-            console.error(message);
+            console.error(message); // <--- 将 consoleerror 改为 console.error
         });
 
         // 监听更新玩家手牌，恢复排序
@@ -1237,29 +1259,27 @@ function GameLayout() {
 
         // 监听游戏阶段变化
         socket.on('gamePhaseChanged', (data) => {
+            console.log('[客户端] 收到了 gamePhaseChanged 事件:', data); 
             if (data.phase === 'playing') {
                 setGamePhase('playing');
-                
-                // 如果是抠底玩家，设置为当前出牌玩家
+                console.log('[客户端] setGamePhase(\'playing\') 已调用'); // 添加日志
                 if (data.currentPlayer === socket.id) {
                     setIsMyTurn(true);
+                    console.log('[客户端] setIsMyTurn(true) 已调用 (来自 gamePhaseChanged)'); // 添加日志
                 }
-                
                 setCurrentPlayer(data.currentPlayer);
             }
         });
         
         // 监听轮到谁出牌
         socket.on('playerTurn', (data) => {
-            console.log('Received playerTurn event:', data);
+            console.log('[客户端] 收到了 playerTurn 事件:', data); 
             setCurrentPlayer(data.player);
             const isCurrentPlayerTurn = data.player === socket.id;
-            console.log('Is current player turn:', isCurrentPlayerTurn, 'socket.id:', socket.id);
             setIsMyTurn(isCurrentPlayerTurn);
-            
-            // 修改这一行，使用服务器发送的 isFirstPlayer 字段
-            setIsFirstPlayerInRound(data.player === socket.id && data.isFirstPlayer);
-            console.log('isFirstPlayerInRound set to:', data.player === socket.id && data.isFirstPlayer);
+            console.log(`[客户端] setIsMyTurn(${isCurrentPlayerTurn}) 已调用 (来自 playerTurn)`); // 添加日志
+            setIsFirstPlayerInRound(data.isFirstPlayer); 
+            console.log(`[客户端] setIsFirstPlayerInRound(${data.isFirstPlayer}) 已调用`); // 添加日志
         });
         
         // 监听其他玩家出牌
@@ -1287,6 +1307,81 @@ function GameLayout() {
             // TODO: 显示错误信息
         });
 
+        // 监听房间信息，确定玩家位置
+        socket.on('roomInfo', (room) => {
+            console.log('[客户端] 收到了 roomInfo 事件:', room); 
+            if (!room || !room.players) {
+                console.error("Received invalid roomInfo data", room);
+                setIsLoadingPlayers(false); // 即使出错也停止加载
+                return;
+            }
+
+            const selfId = socket.id;
+            const playerIndex = room.players.findIndex(p => p.id === selfId);
+
+            console.log(`Self ID: ${selfId}, Found at index: ${playerIndex}, Total players: ${room.players.length}`); 
+
+            let orderedPlayers = []; 
+
+            if (playerIndex !== -1 && room.players.length === 4) {
+                orderedPlayers = [
+                    { ...room.players[playerIndex], position: 'bottom' },
+                    { ...room.players[(playerIndex + 1) % 4], position: 'right' },
+                    { ...room.players[(playerIndex + 2) % 4], position: 'top' },
+                    { ...room.players[(playerIndex + 3) % 4], position: 'left' },
+                ];
+                console.log("Calculated ordered players:", orderedPlayers); 
+                setPlayersInfo(orderedPlayers); 
+                setIsLoadingPlayers(false); // <--- 获取到有效数据后停止加载
+            } else if (room.players.length > 0) { 
+                 console.warn(`Player count is ${room.players.length}, assigning default positions.`);
+                 const defaultOrderedPlayers = room.players.map((p, index) => {
+                     let position = ['bottom', 'right', 'top', 'left'][index];
+                     if(p.id === selfId) position = 'bottom'; 
+                     return {...p, position: position };
+                 });
+                 console.log('[客户端] 计算出的默认玩家位置:', defaultOrderedPlayers); 
+                 setPlayersInfo(defaultOrderedPlayers);
+                 setIsLoadingPlayers(false); // <--- 获取到有效数据后停止加载
+            } else {
+                 console.error("Could not determine player order or no players in room.");
+                 setPlayersInfo([]); 
+                 setIsLoadingPlayers(false); // <--- 即使出错也停止加载
+            }
+        });
+
+        // 监听其他玩家出牌
+        socket.on('cardPlayed', (data) => {
+            console.log(`玩家 ${data.playerName || data.player} 出了 ${data.cards.length} 张牌:`, data.cards);
+            // 更新当前轮次的出牌信息
+            setPlayedCardsInfo(prev => ({
+                ...prev,
+                [data.player]: data.cards // 存储该玩家出的牌
+            }));
+        });
+        
+        // 监听轮到谁出牌 - 用于清空上一轮的出牌记录
+        socket.on('playerTurn', (data) => {
+            console.log('Received playerTurn event:', data);
+            setCurrentPlayer(data.player);
+            const isCurrentPlayerTurn = data.player === socket.id;
+            setIsMyTurn(isCurrentPlayerTurn);
+            setIsFirstPlayerInRound(data.isFirstPlayer); // 直接使用服务器的标志
+
+            // 如果是新一轮的第一个玩家出牌，清空上一轮的出牌显示
+            if (data.isFirstPlayer) {
+                console.log("New round started, clearing played cards display.");
+                setPlayedCardsInfo({});
+            }
+        });
+
+        // 监听轮次结束 (可选，也可以在 playerTurn 清理)
+        socket.on('roundEnd', (data) => {
+            // console.log(`本轮结束，玩家 ${data.winner} 获胜`);
+            // 清理出牌显示也可以放在这里，但 playerTurn isFirstPlayer 更及时
+            // setPlayedCardsInfo({}); 
+        });
+
         return () => {
             console.log('清理 socket 监听器');
             socket.off('gameStart');
@@ -1307,24 +1402,12 @@ function GameLayout() {
             socket.off('cardPlayed');
             socket.off('roundEnd');
             socket.off('playError');
+            socket.off('roomInfo');
+            socket.off('cardPlayed');
+            socket.off('playerTurn');
+            socket.off('roundEnd');
         };
-    }, [sortCards]); // 只依赖sortCards，因为它是稳定的callback函数
-
-    // 检查是否可以加固或反主
-    useEffect(() => {
-        if (mainCalled && !hasCounteredMain) {  // 添加 !hasCounteredMain 条件
-            if (mainCaller === socket.id || isMainCaller) {
-                console.log('我是叫主玩家，检查是否可以加固，使用的王:', mainCards?.joker);
-                checkCanFixMain(mainCards?.joker);
-                setShowFixButton(true);
-            } else {
-                console.log('我是其他玩家，检查是否可以反主');
-                checkCanCounterMain();
-                setSelectedJoker(null);
-                setShowCounterButton(true);
-            }
-        }
-    }, [mainCalled, mainCaller, mainCards, isMainCaller, checkCanFixMain, checkCanCounterMain, playerCards, hasCounteredMain]);
+    }, [sortCards, socket.id]); // Dependencies
 
     // 叫主倒计时
     useEffect(() => {
@@ -1401,9 +1484,69 @@ function GameLayout() {
         }
     }, [bottomDealDeadline]);
 
+    // --- 在 return 语句之前或内部计算按钮状态 ---
+    // (可以在 return 内部需要的地方计算，或者在 return 前面计算一次)
+    const shouldCheckFixOrCounter = mainCalled && !hasCounteredMain && gamePhase === 'pregame'; // 只在 pregame 阶段检查
+    
+    let showFixButtonRender = false;
+    let canFixMainRender = false;
+    let showCounterButtonRender = false;
+    let canCounterMainRender = false;
+
+    if (shouldCheckFixOrCounter) {
+        const isCurrentPlayerMainCaller = mainCaller === socket.id;
+        const canSteal = preGameState.canStealMain;
+
+        if (isCurrentPlayerMainCaller) {
+            showFixButtonRender = true;
+            const jokerToMatch = mainCards?.joker;
+            const jokerCount = playerCards.filter(card =>
+                card.suit === 'JOKER' && card.value === jokerToMatch
+            ).length;
+            canFixMainRender = jokerCount >= 2 && canSteal && !isMainFixed;
+        } else {
+            showCounterButtonRender = true;
+            const bigJokerPair = playerCards.filter(card => card.suit === 'JOKER' && card.value === 'BIG').length === 2;
+            const smallJokerPair = playerCards.filter(card => card.suit === 'JOKER' && card.value === 'SMALL').length === 2;
+            const hasPair = ['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].some(suit => {
+                 const suitPairs = {};
+                 playerCards.forEach(card => {
+                     if (card.suit === suit) {
+                         suitPairs[card.value] = (suitPairs[card.value] || 0) + 1;
+                     }
+                 });
+                 return Object.values(suitPairs).some(count => count >= 2);
+             });
+            canCounterMainRender = (bigJokerPair || smallJokerPair) && hasPair && canSteal;
+        }
+    }
+
+    // 添加新的 useEffect 来处理游戏阶段变化时的清理
+    useEffect(() => {
+        console.log(`[Effect] Game phase changed to: ${gamePhase}`);
+        // 当游戏阶段变为 'playing' 时，确保清除所有卡牌选择状态
+        if (gamePhase === 'playing') {
+            console.log("[Effect] Phase is now playing, clearing selection states.");
+            setSelectedCards([]); // 清除出牌阶段的选择
+            setSelectedBottomCards([]); // 再次确保抠底阶段的选择被清除
+        }
+        // 如果未来有其他阶段需要清理，也可以在这里添加 else if
+    }, [gamePhase]); // 这个 effect 只在 gamePhase 变化时运行
+
+    // **添加加载状态处理**
+    if (isLoadingPlayers) {
+        return (
+            <Center h="100vh" bg="green.700">
+                <Spinner size="xl" color="white" />
+                <Text ml={4} color="white" fontSize="lg">正在加载玩家信息...</Text>
+            </Center>
+        );
+    }
+
     // 渲染界面
     return (
-        <Box position="relative" h="100vh" bg="gray.100">
+        <Box position="relative" h="100vh" bg="green.700" overflow="hidden"> {/* 使用深绿色背景 */}
+            {/* GameInfo 组件保持不变 */}
             <GameInfo 
                 mainSuit={mainSuit}
                 mainCaller={mainCaller}
@@ -1414,7 +1557,93 @@ function GameLayout() {
                 hasCounteredMain={hasCounteredMain}
             />
 
-            {/* 发牌进度显示 */}
+            {/* --- 玩家信息框和出牌区域 --- */}
+            {console.log('[渲染检查] 准备渲染玩家信息区域. playersInfo:', JSON.stringify(playersInfo))}
+
+            {/* 添加条件渲染：仅当 playersInfo 有数据时才渲染 */}
+            {playersInfo.map((player) => {
+                if (!player || !player.position) {
+                     console.warn("渲染跳过：玩家信息不完整", player); // 添加警告
+                     return null; 
+                }
+
+                let positionProps = {};
+                let playedCardsPositionProps = {};
+                let playedCardsAlignment = {}; // 用于HStack/VStack
+
+                switch (player.position) {
+                    case 'top': // 对家 (上方)
+                        positionProps = { top: "5%", left: "50%", transform: "translateX(-50%)" };
+                        playedCardsPositionProps = { top: "calc(5% + 40px)", left: "50%", transform: "translateX(-50%)", mt: 1 }; // 信息框下方
+                        playedCardsAlignment = { justify: "center" };
+                        break;
+                    case 'left': // 左边玩家
+                        positionProps = { top: "50%", left: "3%", transform: "translateY(-50%)" };
+                        playedCardsPositionProps = { top: "50%", left: "calc(3% + 80px)", transform: "translateY(-50%)", ml: 1 }; // 信息框右侧
+                        playedCardsAlignment = { align: "center" };
+                        break;
+                    case 'right': // 右边玩家
+                        positionProps = { top: "50%", right: "3%", transform: "translateY(-50%)" };
+                        playedCardsPositionProps = { top: "50%", right: "calc(3% + 80px)", transform: "translateY(-50%)", mr: 1 }; // 信息框左侧
+                        playedCardsAlignment = { align: "center" };
+                        break;
+                    case 'bottom': // 自己 (下方) - 信息框可选
+                        // positionProps = { bottom: "20%", left: "50%", transform: "translateX(-50%)" }; // 信息框位置 (如果需要)
+                        playedCardsPositionProps = { bottom: "25%", left: "50%", transform: "translateX(-50%)", mb: 1 }; // 手牌上方
+                        playedCardsAlignment = { justify: "center" };
+                        break;
+                    default:
+                        console.warn("渲染跳过：无效的玩家位置", player); // 添加警告
+                        return null;
+                }
+
+                // 获取当前玩家出的牌
+                const cardsPlayed = playedCardsInfo[player.id] || [];
+
+                return (
+                    <React.Fragment key={player.id}>
+                        {/* 玩家信息框 (除了自己) */}
+                        {player.position !== 'bottom' && (
+                             <Box 
+                                position="absolute" 
+                                {...positionProps}
+                                bg="rgba(255, 255, 255, 0.7)" // 半透明白色背景
+                                p={2} 
+                                borderRadius="md" 
+                                minW="70px" // 最小宽度
+                                zIndex={5} // 确保在牌上方
+                             >
+                                <Text textAlign="center" fontSize="sm" fontWeight="bold">{player.name || player.id.slice(0, 4)}</Text>
+                                {/* 可以在这里添加其他信息，比如剩余牌数 */}
+                            </Box>
+                        )}
+
+                        {/* 出牌区域 */}
+                        {cardsPlayed.length > 0 && (
+                            <HStack 
+                                position="absolute" 
+                                {...playedCardsPositionProps}
+                                {...playedCardsAlignment}
+                                zIndex={10} // 确保在信息框上方
+                                spacing="-25px" // 卡牌重叠效果，负值越大重叠越多
+                            >
+                                {cardsPlayed.map((card, index) => (
+                                    <Card 
+                                        key={`${card.suit}-${card.value}-${index}`} 
+                                        suit={card.suit} 
+                                        value={card.value} 
+                                        className="played-card small" // 使用 small 类来缩小尺寸
+                                    />
+                                ))}
+                            </HStack>
+                        )}
+                    </React.Fragment>
+                );
+            })}
+            {/* --- 玩家信息框和出牌区域结束 --- */}
+
+
+            {/* 发牌进度显示 (保持不变) */}
             {gamePhase === 'pregame' && preGameState.isDealing && (
                 <Center position="absolute" top="50%" left="50%" transform="translate(-50%, -50%)">
                     <Box w="300px">
@@ -1493,15 +1722,10 @@ function GameLayout() {
                 )}
 
                 {/* 已叫主状态下 - 其他玩家的反主界面 */}
-                {mainCalled && 
-                 mainCaller !== socket.id && 
-                 !hasCounteredMain && 
-                 showCounterButton && 
-                 !isStickPhase && 
-                 gamePhase === 'pregame' && (  // 添加游戏阶段的判断
+                {showCounterButtonRender && ( // 使用计算出的 Render 变量
                     <HStack spacing={4}>
-                        {/* 大小王选择和花色对子选择 - 仅在可反主时显示 */}
-                        {preGameState.canStealMain && !hasCounteredMain && (
+                        {/* 大小王选择和花色对子选择 */}
+                        {preGameState.canStealMain && !hasCounteredMain && ( // 保留 canStealMain 条件
                             <>
                                 {/* 大小王选择 */}
                                 <HStack spacing={2}>
@@ -1555,7 +1779,8 @@ function GameLayout() {
                             <Button
                                 colorScheme={hasCounteredMain ? "gray" : "red"}
                                 onClick={handleCounterMain}
-                                isDisabled={hasCounteredMain || !preGameState.canStealMain || !canCounterMain || !counterJoker || !counterPair}
+                                // 使用计算出的 Render 变量
+                                isDisabled={hasCounteredMain || !preGameState.canStealMain || !canCounterMainRender || !counterJoker || !counterPair} 
                             >
                                 {hasCounteredMain ? "已反主" : "反主"}
                             </Button>
@@ -1579,12 +1804,13 @@ function GameLayout() {
                 )}
 
                 {/* 已叫主状态下 - 叫主玩家的加固按钮 */}
-                {mainCalled && (mainCaller === socket.id || isMainCaller) && !hasCounteredMain && !isStickPhase && (
+                {showFixButtonRender && ( // 使用计算出的 Render 变量
                     <HStack>
                         <Button
                             colorScheme={isMainFixed ? "gray" : "green"}
                             onClick={handleFixMain}
-                            isDisabled={isMainFixed || !preGameState.canStealMain || !canFixMain}
+                            // 使用计算出的 Render 变量
+                            isDisabled={isMainFixed || !preGameState.canStealMain || !canFixMainRender} 
                         >
                             {isMainFixed ? "已加固" : "加固"}
                         </Button>
@@ -1752,8 +1978,6 @@ function GameLayout() {
                         <Box mb={4}>
                             <Text fontWeight="bold" mb={2}>原底牌：</Text>
                             <HStack spacing={2}>
-                                {console.log('渲染的底牌数据:', bottomCards)}
-                                {console.log('底牌数量:', bottomCards.length)}
                                 {(bottomCards || []).map((card, index) => (
                                     <Card 
                                         key={index}

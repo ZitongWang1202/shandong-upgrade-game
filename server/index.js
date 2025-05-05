@@ -320,6 +320,10 @@ io.on('connection', (socket) => {
             // 通知所有玩家游戏开始
             io.to(roomId).emit('gameStart');
             console.log('Sent gameStart event to all players in room', roomId);
+
+            // 在 gameStart 之前，再次发送最终确认的房间/玩家信息
+            console.log('Emitting final roomInfo before gameStart');
+            io.to(roomId).emit('roomInfo', room);
         }
     });
 

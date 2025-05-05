@@ -135,3 +135,14 @@
 .card-container .player-card.from-bottom {
     transform: translateY(-10px); /* 初始上移10px */
 }
+
+.played-card.small {
+  width: 45px; /* 调整出牌区域的卡牌宽度 */
+  height: auto; /* 高度自适应 */
+  /* margin: 0 -20px; */ /* 移除固定重叠，使用 HStack spacing 代替 */
+  box-shadow: 1px 1px 3px rgba(0,0,0,0.3); /* 加一点阴影 */
+  border-radius: 3px;
+}
+
+/* 可以为玩家信息框添加样式 */
+/* .player-info-box { ... } */

@@ -216,15 +216,21 @@ module.exports = function(socket, io, games, rooms, utils) {
                             if (originalListener) socket.removeListener('confirmBottomDeal', originalListener);
                             
                             socket.once('confirmBottomDeal', (data) => {
-                                if (originalListener) originalListener(data); // 执行服务器原始抠底逻辑
+                                if (originalListener) originalListener(data); 
                                 setTimeout(() => {
                                     console.log('进入出牌阶段 (抠底后)');
                                     gameState.phase = 'playing';
-                                    gameState.currentPlayer = gameState.bottomDealer; // 设置当前玩家为自己
-                                    gameState.firstPlayerInRound = gameState.bottomDealer; // 设置自己为首轮出牌者
+                                    gameState.currentPlayer = gameState.bottomDealer; 
+                                    gameState.firstPlayerInRound = gameState.bottomDealer; 
                                     
+                                    // --- 确认这三个事件都被发送 ---
+                                    console.log(`[服务器 ${roomId}] 准备发送 gamePhaseChanged:`, { phase: 'playing', currentPlayer: gameState.currentPlayer });
                                     io.to(roomId).emit('gamePhaseChanged', { phase: 'playing', currentPlayer: gameState.currentPlayer, bottomDealer: gameState.bottomDealer });
-                                    io.to(roomId).emit('playerTurn', { player: gameState.currentPlayer, playerName: "你的回合", isFirstPlayer: true }); // 确保通知自己是第一个出牌
+                                    
+                                    console.log(`[服务器 ${roomId}] 准备发送 playerTurn:`, { player: gameState.currentPlayer, isFirstPlayer: true });
+                                    io.to(roomId).emit('playerTurn', { player: gameState.currentPlayer, playerName: "你的回合", isFirstPlayer: true }); 
+                                    
+                                    console.log(`[服务器 ${roomId}] 确认 roomInfo 已在游戏开始时发送`);
                                 }, 1000);
                             });
                         }, 3000); // 粘牌->抠底
@@ -289,12 +295,32 @@ module.exports = function(socket, io, games, rooms, utils) {
             message: '出牌测试：已为你预设手牌，对家叫红桃主，你抠底后请测试领出牌型。'
         });
         
-        // 开始游戏 (保持不变)
+        // 开始游戏
         setTimeout(() => {
             console.log('开始出牌测试游戏...');
-            io.to(roomId).emit('gameStart');
+            // 发送游戏开始事件
+            io.to(roomId).emit('gameStart'); 
+            
+            // --- 添加的代码：发送包含最终玩家信息的 roomInfo ---
+            // 从 gameState 获取最新的玩家列表
+            const finalPlayers = gameState.players.map(p => ({ 
+                id: p.id, 
+                name: p.name, 
+                ready: p.ready, // 可以包含其他客户端需要的信息
+                isBot: p.isBot 
+            }));
+            // 构建 roomInfo 数据结构
+            const roomDataForClient = { 
+                id: roomId, 
+                players: finalPlayers 
+            };
+            console.log('发送最终的 roomInfo 给客户端:', roomDataForClient);
+            io.to(roomId).emit('roomInfo', roomDataForClient);
+            // --- 添加的代码结束 ---
+
+            // 开始发牌流程
             setTimeout(() => {
-                dealPlayingTestCards(0); // 开始发牌流程
+                dealPlayingTestCards(0); 
             }, 500);
         }, 1000);
     });
