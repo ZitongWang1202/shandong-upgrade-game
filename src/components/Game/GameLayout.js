@@ -11,681 +11,176 @@ import {
     Text,
     Progress,
     VStack,
-    Spinner // <-- Import Spinner if adding loading state
+    Spinner
 } from '@chakra-ui/react';
 import Card from './Card';
 import GameInfo from './GameInfo';
+import PlayerInfoArea from './PlayerInfoArea';
+import PlayerHandDisplay from './PlayerHandDisplay';
+import ActionPanel from './ActionPanel';
 import socket from '../../utils/socket';
 import '../../cards.css';
+import {
+    isMainCard,
+    isValidCardPattern,
+    isValidFollow,
+    sortCards,
+    isConsecutive
+} from '../../utils/cardLogic.js';
 
 function GameLayout() {
-    // 基础状态
-    const [playerCards, setPlayerCards] = useState([]); // 当前玩家手牌
-    const [isDealing, setIsDealing] = useState(true);          // 是否在发牌中
-    const [dealingProgress, setDealingProgress] = useState(0); // 发牌进度
-    const [gamePhase, setGamePhase] = useState('pregame');     // 游戏阶段：'waiting'/'pregame'/'playing'/'aftergame'
+    const [playerCards, setPlayerCards] = useState([]);
+    const [gamePhase, setGamePhase] = useState('pregame');
     const [preGameState, setPreGameState] = useState({ 
-        isDealing: false, 
+        commonMain: '2',
+        isDealing: true,
+        dealingProgress: 0,
         canCallMain: false,
-        canStickMain: false,  // 添加是否可以粘主的状态
-        stickMainDeadline: null,  // 添加粘主截止时间
-    }); 
-    
-    // 游戏状态
-    const [mainSuit, setMainSuit] = useState(null); // 当前主色
-    const [mainCaller, setMainCaller] = useState(null); // 叫主的玩家
-    const [mainCards, setMainCards] = useState(null); // 叫主的牌型
-    const [mainCalled, setMainCalled] = useState(false); // 是否已经有人叫主
-    
-    // 操作状态
-    const [selectedJoker, setSelectedJoker] = useState(null); // 'BIG' 或 'SMALL'
-    const [selectedPair, setSelectedPair] = useState(null); // {suit: 'HEARTS', value: '5'}
-    const [selectedConsecutivePair, setSelectedConsecutivePair] = useState(null);
-    const [canCallMain, setCanCallMain] = useState(false);
-    const [canStealMain, setCanStealMain] = useState(false);
-    const [canFixMain, setCanFixMain] = useState(false);    // 是否可以加固
-    const [canCounterMain, setCanCounterMain] = useState(false); // 是否可以反主
-    const [showFixButton, setShowFixButton] = useState(false); // 是否显示加固按钮
-    const [showCounterButton, setShowCounterButton] = useState(false); // 是否显示反主按钮
-    const [counterJoker, setCounterJoker] = useState(null); // 反主选中的王
-    const [counterPair, setCounterPair] = useState(null); // 反主选中的对子
-
-    // 添加一个新状态
-    const [isMainFixed, setIsMainFixed] = useState(false);
-
-    // 添加一个状态表示是否反主
-    const [hasCounteredMain, setHasCounteredMain] = useState(false);
-
-    // 添加状态来跟踪时间限制
-    const [callMainDeadline, setCallMainDeadline] = useState(null);
-    const [stealMainDeadline, setStealMainDeadline] = useState(null);
-    const [callMainTimeLeft, setCallMainTimeLeft] = useState(null);
-    const [stealMainTimeLeft, setStealMainTimeLeft] = useState(null);
-
-    // 添加新状态
-    const [isMainCaller, setIsMainCaller] = useState(false);
-
-    // 添加常主状态
-    const [commonMain, setCommonMain] = useState('2');
-
-    // 添加新的状态
-    const [canStickCards, setCanStickCards] = useState(false);  // 是否可以粘牌
-    const [hasStickCards, setHasStickCards] = useState(false);  // 是否已经粘牌
-    const [isStickPhase, setIsStickPhase] = useState(false);    // 是否在粘牌阶段
-    const [mainCallerCards, setMainCallerCards] = useState(null); // 叫主玩家的牌
-    const [selectedStickCards, setSelectedStickCards] = useState({
-        commonMain: null,  // 选中的常主/固定常主
-        suitCards: []      // 选中的同花色牌
+        callMainDeadline: null,
+        callMainTimeLeft: null,
+        mainCalled: false,
+        mainSuit: null,
+        mainCaller: null,
+        mainCards: null,
+        isMainCaller: false,
+        canStealMain: false,
+        stealMainDeadline: null,
+        stealMainTimeLeft: null,
+        isMainFixed: false,
+        hasCounteredMain: false,
+        canFixMain: false,
+        canCounterMain: false,
+        showFixButton: false,
+        showCounterButton: false,
+        counterJoker: null,
+        counterPair: null,
+        canStickMain: false,
+        stickMainDeadline: null,
+        stickMainTimeLeft: null,
+        isStickPhase: false,
+        hasStickCards: false,
+        mainCallerCardsForSticking: null,
+        selectedCardsForSticking: { commonMain: null, suitCards: [] },
+        isBottomDealer: false,
+        bottomCards: [],
+        selectedBottomCards: [],
+        bottomDealDeadline: null,
+        bottomDealTimeLeft: null,
+        cardsFromBottom: [],
+        interactedBottomCards: new Set()
     });
 
-    // 添加粘主倒计时状态
-    const [stickMainTimeLeft, setStickMainTimeLeft] = useState(null);
-    const [stickMainDeadline, setStickMainDeadline] = useState(null);
+    const [selectedJoker, setSelectedJoker] = useState(null);
+    const [selectedPair, setSelectedPair] = useState(null);
 
-    // 在状态部分添加新的状态
     const [selectedCards, setSelectedCards] = useState([]);
     const [maxSelectableCards, setMaxSelectableCards] = useState(0);
     const [cardSelectionValidator, setCardSelectionValidator] = useState(null);
 
-    // 添加抠底相关状态
-    const [isBottomDealer, setIsBottomDealer] = useState(false);
-    const [bottomCards, setBottomCards] = useState([]);
-    const [selectedBottomCards, setSelectedBottomCards] = useState([]);
-    const [bottomDealDeadline, setBottomDealDeadline] = useState(null);
-    const [bottomDealTimeLeft, setBottomDealTimeLeft] = useState(null);
-
-    // 在 GameLayout.js 中添加一个新的状态来跟踪来自底牌的牌
-    const [cardsFromBottom, setCardsFromBottom] = useState([]);
-
-    // 在组件顶部添加新的状态
-    const [interactedBottomCards, setInteractedBottomCards] = useState(new Set());
-
-    // 在 GameLayout.js 中添加新的状态
     const [isMyTurn, setIsMyTurn] = useState(false);
     const [currentPlayer, setCurrentPlayer] = useState(null);
     const [isFirstPlayerInRound, setIsFirstPlayerInRound] = useState(false);
+    const [leadingPlay, setLeadingPlay] = useState(null);
 
-    const [playersInfo, setPlayersInfo] = useState([]); // 存储所有玩家信息 [{id, name, position}]
-    const [playedCardsInfo, setPlayedCardsInfo] = useState({}); // { playerId1: [cards...], playerId2: [cards...] }
-    const [isLoadingPlayers, setIsLoadingPlayers] = useState(true); // <-- 添加加载状态
+    const [playersInfo, setPlayersInfo] = useState([]);
+    const [playedCardsInfo, setPlayedCardsInfo] = useState({});
+    const [isLoadingPlayers, setIsLoadingPlayers] = useState(true);
 
-    // 定义牌型常量
-    const CARD_PATTERN = {
-        SINGLE: 'SINGLE',         // 单张
-        PAIR: 'PAIR',             // 对子
-        CONSECUTIVE_PAIRS: 'CONSECUTIVE_PAIRS', // 连对
-        FLASH: 'FLASH',           // 闪
-        THUNDER: 'THUNDER',       // 震
-        RAIN: 'RAIN'              // 雨
-    };
-
-    // 添加处理抠底的函数
     const handleConfirmBottomDeal = () => {
-        if (selectedBottomCards.length === 4) {
+        if (preGameState.selectedBottomCards.length === 4) {
             socket.emit('confirmBottomDeal', {
                 roomId: localStorage.getItem('roomId'),
-                putCards: selectedBottomCards
+                putCards: preGameState.selectedBottomCards
             });
-            
-            // 立即清除本地状态以提供快速反馈
-            setSelectedBottomCards([]); 
-            setIsBottomDealer(false);
-            setBottomDealTimeLeft(null);
-            setCardsFromBottom([]);  
+            setPreGameState(prev => ({
+                ...prev,
+                selectedBottomCards: [],
+                isBottomDealer: false,
+                bottomDealTimeLeft: null,
+                cardsFromBottom: []
+            }));
         }
     };
 
-    // 修改底牌选择函数
     const handleBottomCardSelect = (card) => {
-        if (!isBottomDealer) return;
-
-        // 使用索引来找到完全相同的卡牌对象
+        if (!preGameState.isBottomDealer) return;
         const cardIndex = playerCards.findIndex(c => c === card);
-        const isSelected = selectedBottomCards.some(c => {
+        const isSelected = preGameState.selectedBottomCards.some(c => {
             const selectedIndex = playerCards.findIndex(pc => pc === c);
             return selectedIndex === cardIndex;
         });
-
         if (isSelected) {
-            // 取消选中 - 使用索引来确保只取消特定的那张牌
-            setSelectedBottomCards(prev => 
-                prev.filter(c => {
+            setPreGameState(prev => ({
+                ...prev,
+                selectedBottomCards: prev.selectedBottomCards.filter(c => {
                     const selectedIndex = playerCards.findIndex(pc => pc === c);
                     return selectedIndex !== cardIndex;
                 })
-            );
-        } else if (selectedBottomCards.length < 4) {
-            setSelectedBottomCards(prev => [...prev, card]);
+            }));
+        } else if (preGameState.selectedBottomCards.length < 4) {
+            setPreGameState(prev => ({ ...prev, selectedBottomCards: [...prev.selectedBottomCards, card] }));
         }
     };
 
-    // 修改卡牌点击或悬浮的处理函数
     const handleCardInteraction = (card) => {
         if (card.isFromBottom) {
-            setInteractedBottomCards(prev => {
-                const newSet = new Set(prev);
-                // 使用索引确保每张牌的唯一性
+            setPreGameState(prev => {
+                const newSet = new Set(prev.interactedBottomCards);
                 const cardIndex = playerCards.findIndex(c => c === card);
                 newSet.add(`${card.suit}-${card.value}-${cardIndex}`);
-                return newSet;
+                return { ...prev, interactedBottomCards: newSet };
             });
         }
     };
 
-    // 修改 handlePlayCards 函数，在这里进行最终验证 (这个函数之前已经修改过)
     const handlePlayCards = () => {
         if (selectedCards.length > 0 && isMyTurn) {
-            
-            console.log("Attempting to play cards:", selectedCards);
-
-            // --- 在这里添加最终的牌型验证 ---
-            // 领出验证
             if (isFirstPlayerInRound) {
-                console.log("Final validation for first player");
-                if (!isValidCardPattern(selectedCards, mainSuit, commonMain)) {
-                    console.error("出牌失败：领出牌不构成有效牌型");
+                if (!isValidCardPattern(selectedCards, preGameState.mainSuit, preGameState.commonMain)) {
                     alert("出牌失败：领出牌不构成有效牌型"); 
                     return; 
                 }
-                console.log("First player pattern is valid.");
-            } 
-            // 跟牌验证
-            else {
-                 console.log("Final validation for following player");
-                // TODO: 实现跟牌验证逻辑 
-                // 1. 检查牌数是否与领出者一致
-                // const leadingPlay = roundCards?.[0]; 
-                // if (leadingPlay && selectedCards.length !== leadingPlay.cards.length) {
-                //    console.error(`出牌失败：需要出 ${leadingPlay.cards.length} 张牌`);
-                //    alert(`出牌失败：需要出 ${leadingPlay.cards.length} 张牌`);
-                //    return;
-                // }
-                // 2. 检查是否符合跟牌规则（花色、大小等）
-                console.warn("跟牌验证逻辑未完全实现");
-            }
-
-            // 发送出牌事件到服务器
-             console.log("Validation passed, emitting playCards event");
-            socket.emit('playCards', {
-                roomId: localStorage.getItem('roomId'),
-                cards: selectedCards
-            });
-            
-            // 清理选中状态
-            setSelectedCards([]);
-            setIsMyTurn(false); // 出牌后，设置自己不是当前回合
-        }
-    };
-
-    // 检查是否是同花色对子
-    const isSameSuitPair = (cards) => {
-        if (cards.length !== 2) return false;
-        return cards[0].suit === cards[1].suit && cards[0].value === cards[1].value;
-    };
-
-    // 辅助函数：获取主牌的等级（数值越大等级越高）判断主牌的连对
-    const getMainCardRank = (value, suit, mainSuit, commonMain) => {
-        // 1. 大小王 (暂不处理，因为连对通常不包含王)
-        if (suit === 'JOKER') return -1; // 王不参与普通连对排名
-
-        // 2. 当前常主
-        if (value === commonMain) {
-            return suit === mainSuit ? 20 : 19; // 主花色常主(20) > 副花色常主(19)
-        }
-
-        // 3. 固定常主 (5, 3, 2)
-        const fixedCommonValues = ['5', '3', '2'];
-        if (fixedCommonValues.includes(value)) {
-            // 基础分: 5(15), 3(13), 2(11)
-            const baseRank = 15 - fixedCommonValues.indexOf(value) * 2; 
-            return suit === mainSuit ? baseRank : baseRank - 1; // 主花色(15/13/11) > 副花色(14/12/10)
-        }
-
-        // 4. 普通主牌 (A, K, Q, ..., 4) - 必须是主花色
-        if (suit === mainSuit) {
-            const normalValues = ['4', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']; // A最大(9), 4最小(0)
-            const index = normalValues.indexOf(value);
-            if (index !== -1) {
-                return index; // 排名 0 到 9
-            }
-        }
-        
-        // 如果不是主牌，返回最低等级
-        return -1; 
-    };
-
-    // 检查是否是连对
-    const isConsecutivePairs = (cards, mainSuit, commonMain) => {
-        if (cards.length < 4 || cards.length % 2 !== 0) return false;
-
-        // 1. 按点数分组，并检查每个点数是否能形成同花色对子
-        const valueGroups = {};
-        cards.forEach(card => {
-            if (!valueGroups[card.value]) {
-                valueGroups[card.value] = [];
-            }
-            valueGroups[card.value].push(card);
-        });
-
-        const pairDetails = []; // 存储每个有效对子的信息 { value: '5', suit: 'HEARTS', isMain: true }
-        let category = null; // 'main' 或 一个副牌花色 suit
-        let isValid = true;
-
-        for (const value in valueGroups) {
-            const cardsWithValue = valueGroups[value];
-            
-            // a. 检查数量是否为偶数
-            if (cardsWithValue.length % 2 !== 0) {
-                console.log(`连对检查失败：点数 ${value} 数量不是偶数`);
-                isValid = false;
-                break;
-            }
-
-            // b. 检查这些牌是否能组成同花色对子
-            const suitCounts = {};
-            cardsWithValue.forEach(card => {
-                suitCounts[card.suit] = (suitCounts[card.suit] || 0) + 1;
-            });
-            // 每个花色的数量也必须是偶数
-            if (Object.values(suitCounts).some(count => count % 2 !== 0)) {
-                 console.log(`连对检查失败：点数 ${value} 包含不成对的花色牌`);
-                isValid = false;
-                break;
-            }
-
-            // c. 记录这些对子的信息，并检查类别一致性
-            for (const suit in suitCounts) {
-                // suitCounts[suit] 保证是偶数
-                const numPairs = suitCounts[suit] / 2;
-                const representativeCard = cardsWithValue.find(c => c.suit === suit); // 找这个花色的代表牌
-                const isMain = isMainCard(representativeCard, mainSuit, commonMain);
-                const currentPairCategory = isMain ? 'main' : suit;
-
-                if (category === null) {
-                    category = currentPairCategory; // 设定整体牌型类别
-                } else if (category !== currentPairCategory) {
-                    console.log(`连对检查失败：混合了不同类型的对子 (${category} 和 ${currentPairCategory})`);
-                    isValid = false;
-                    break; // 跳出内层循环
-                }
-                
-                // 为这个花色添加 N 个对子信息
-                for (let i = 0; i < numPairs; i++) {
-                    pairDetails.push({ value, suit, isMain });
-                }
-            }
-            if (!isValid) break; // 跳出外层循环
-        }
-
-        if (!isValid || category === null || pairDetails.length < 2) { // 至少需要两对
-            return false;
-        }
-
-        // 2. 判断连续性 (基于确定的唯一类别 category)
-        // Case 1: 全是主牌对
-        if (category === 'main') {
-            // 按主牌等级排序 (pairDetails 包含了所有对子，可能有重复点数但不同花色的主牌对)
-            pairDetails.sort((a, b) => {
-                return getMainCardRank(a.value, a.suit, mainSuit, commonMain) - 
-                       getMainCardRank(b.value, b.suit, mainSuit, commonMain);
-            });
-
-            // 检查主牌等级是否连续 (比较相邻对子的等级)
-            for (let i = 1; i < pairDetails.length; i++) {
-                const rankPrev = getMainCardRank(pairDetails[i-1].value, pairDetails[i-1].suit, mainSuit, commonMain);
-                const rankCurr = getMainCardRank(pairDetails[i].value, pairDetails[i].suit, mainSuit, commonMain);
-                
-                if (rankCurr - rankPrev !== 1) {
-                    console.log(`主牌连对检查失败：等级 ${rankPrev} (${pairDetails[i-1].value}) 和 ${rankCurr} (${pairDetails[i].value}) 不连续`);
-                    return false;
-                }
-            }
-            console.log("主牌连对检查成功");
-            return true; // 主牌等级连续
-        }
-        // Case 2: 全是同一种副牌对 (category 就是那个副牌花色)
-        else {
-            const normalValues = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-            // 按数字顺序排序 (只需要点数)
-            // 先去重，因为可能有多个相同点数的对子（例如两对副牌K）
-            const uniquePairValues = [...new Set(pairDetails.map(p => p.value))];
-            uniquePairValues.sort((a, b) => normalValues.indexOf(a) - normalValues.indexOf(b));
-
-            // 检查数字索引是否连续
-            for (let i = 1; i < uniquePairValues.length; i++) {
-                const prevIndex = normalValues.indexOf(uniquePairValues[i - 1]);
-                const currIndex = normalValues.indexOf(uniquePairValues[i]);
-                if (currIndex === -1 || prevIndex === -1 || currIndex - prevIndex !== 1) {
-                     console.log(`副牌连对检查失败：${uniquePairValues[i-1]} (index ${prevIndex}) 和 ${uniquePairValues[i]} (index ${currIndex}) 不连续`);
-                    return false;
-                }
-            }
-             console.log("副牌连对检查成功");
-            return true; // 副牌数字连续
-        }
-    };
-
-    // 检查是否是闪
-    const isFlash = useCallback((cards, mainSuit, commonMain) => {
-        // 1. 必须正好 4 张牌
-        if (!cards || cards.length !== 4) return false;
-
-        // 2. 4 张牌的点数必须相同
-        const value = cards[0].value;
-        if (!cards.every(card => card.value === value)) return false;
-
-        // 3. 这个点数必须是 '2', '3', '5' 或当前的 commonMain
-        const validFlashValues = ['2', '3', '5'];
-        if (commonMain) { // 确保 commonMain 不是 null 或 undefined
-             validFlashValues.push(commonMain);
-        }
-        if (!validFlashValues.includes(value)) {
-             console.log(`闪检查：点数 ${value} 不是 2, 3, 5 或常主 ${commonMain}`);
-             return false;
-        }
-            
-        // 4. 4 张牌花色必须各不相同
-        const suits = new Set(cards.map(card => card.suit));
-        if (suits.size !== 4) return false;
-
-        // 如果以上都满足，则是闪
-        return true;
-    }, []); // 依赖项可能需要 commonMain
-
-    // 检查是否是震
-    const isThunder = useCallback((cards, mainSuit, commonMain) => {
-        // 1. 必须多于 4 张牌
-        if (!cards || cards.length <= 4) return false;
-
-        // 2. 所有牌的点数必须相同
-        const value = cards[0].value;
-        if (!cards.every(card => card.value === value)) return false;
-
-        // 3. 这个点数必须是 '2', '3', '5' 或当前的 commonMain
-        const validThunderValues = ['2', '3', '5'];
-         if (commonMain) { // 确保 commonMain 不是 null 或 undefined
-             validThunderValues.push(commonMain);
-         }
-        if (!validThunderValues.includes(value)) {
-             console.log(`震检查：点数 ${value} 不是 2, 3, 5 或常主 ${commonMain}`);
-            return false;
-        }
-
-        // 4. 这些牌中必须包含 4 种不同的花色
-        const uniqueSuits = new Set(cards.map(card => card.suit));
-        if (uniqueSuits.size !== 4) {
-             console.log(`震检查：点数 ${value} 的牌中包含的花色种类 (${uniqueSuits.size}) 不等于 4`);
-             return false;
-        }
-        
-        // 如果以上都满足，则是震
-        return true;
-    }, []); // 依赖项可能需要 commonMain
-
-    // 检查是否是雨 - 花色相同，数字连续五张以上的牌型
-    const isRain = (cards) => {
-        if (cards.length < 5) return false;
-
-        // 检查花色是否相同
-        const suit = cards[0].suit;
-        if (!cards.every(card => card.suit === suit)) return false;
-
-        // 对牌值进行分组
-        const valueGroups = {};
-        cards.forEach(card => {
-            if (!valueGroups[card.value]) valueGroups[card.value] = [];
-            valueGroups[card.value].push(card);
-        });
-
-        // 检查是否有连续的五张或以上的牌
-        const normalValues = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-        const values = Object.keys(valueGroups).sort(
-            (a, b) => normalValues.indexOf(a) - normalValues.indexOf(b)
-        );
-
-        // 检查连续性
-        let consecutiveCount = 1;
-        for (let i = 1; i < values.length; i++) {
-            const prevIndex = normalValues.indexOf(values[i - 1]);
-            const currIndex = normalValues.indexOf(values[i]);
-            if (currIndex - prevIndex === 1) {
-                consecutiveCount++;
             } else {
-                consecutiveCount = 1;
+                if (!isValidFollow(selectedCards, playerCards, leadingPlay, preGameState.mainSuit, preGameState.commonMain)) {
+                    alert("出牌失败：跟牌不符合规则");
+                    return;
+                }
             }
-            if (consecutiveCount >= 5) return true;
+            socket.emit('playCards', { roomId: localStorage.getItem('roomId'), cards: selectedCards });
+            setSelectedCards([]);
+            setIsMyTurn(false);
         }
-
-        return false;
     };
 
-    // 判断一张牌是否是主牌
-    const isMainCard = (card, mainSuit, commonMain) => {
-        // 大小王是主牌
-        if (card.suit === 'JOKER') return true;
-        
-        // 主花色的牌是主牌
-        if (card.suit === mainSuit) return true;
-        
-        // 常主牌是主牌
-        if (card.value === commonMain) return true;
-        
-        // 固定常主2、3、5是主牌
-        if (['2', '3', '5'].includes(card.value)) return true;
-        
-        return false;
-    };
-
-
-    // 最终的牌型验证函数 - 调整顺序
-    const isValidCardPattern = useCallback((cards, mainSuit, commonMain) => {
-        if (!cards || cards.length === 0) return false; // 0 张牌
-        
-        // 1. 单张
-        if (cards.length === 1) return true; 
-        
-        // 2. 对子
-        if (cards.length === 2) return isSameSuitPair(cards); 
-        
-        // --- 针对 4 张牌的特殊处理 ---
-        if (cards.length === 4) {
-            // a. 优先检查是否是 闪
-            if (isFlash(cards, mainSuit, commonMain)) {
-                 console.log("判断为：闪");
-                 return true;
-            }
-            // b. 如果不是闪，再检查是否是 连对 (两对牌的情况)
-            if (isConsecutivePairs(cards, mainSuit, commonMain)) {
-                console.log("判断为：连对 (4张)");
-                return true;
-            }
-            // 如果4张牌既不是闪也不是连对，则不是有效牌型
-            console.log("4张牌既不是闪也不是连对");
-            return false; 
-        }
-        
-        // --- 处理其他牌数 ---
-        
-        // 3. 连对 (牌数 > 4 且为偶数)
-        if (cards.length > 4 && cards.length % 2 === 0) { 
-            if (isConsecutivePairs(cards, mainSuit, commonMain)) {
-                console.log("判断为：连对 (>4张)");
-                return true;
-            }
-        }
-
-        // 4. 震 (牌数 > 4) - 根据新规则，震牌数 > 4
-        if (cards.length > 4) { 
-            if (isThunder(cards, mainSuit, commonMain)) {
-                 console.log("判断为：震");
-                 return true;
-            }
-        }
-
-        // 5. 雨 (牌数 >= 5)
-        if (cards.length >= 5) {
-            if (isRain(cards)) {
-                console.log("判断为：雨");
-                return true;
-            }
-        }
-        
-        // 如果以上都不是
-        console.log(`未匹配任何有效牌型 (牌数: ${cards.length})`);
-        return false;
-    }, [isSameSuitPair, isFlash, isConsecutivePairs, isThunder, isRain, mainSuit, commonMain]); // 依赖项可能需要加上 mainSuit, commonMain
-
-    
-    // 卡牌选择验证器对象
     const validators = useMemo(() => ({
         stickPhase: (card, currentSelected) => {
-            // 如果已经选了3张牌，不能再选
             if (currentSelected.length >= 3) return false;
-            
-            // 如果还没有选牌，第一张必须是常主或固定常主
             if (currentSelected.length === 0) {
-                return card.value === commonMain || ['2', '3', '5'].includes(card.value);
+                return card.value === preGameState.commonMain || ['2', '3', '5'].includes(card.value);
             }
-            
-            // 如果已经选了一张牌，接下来两张必须是主花色的牌
-            return card.suit === mainSuit && currentSelected.length < 3;
+            return card.suit === preGameState.mainSuit && currentSelected.length < 3;
         },
         gaming: (card, currentSelected) => {
-            // console.log('Gaming validator called with:', { // 注释掉或删除
-            //     isMyTurn,
-            //     isFirstPlayerInRound,
-            //     card,
-            //     currentSelectedLength: currentSelected.length,
-            // });
-            
-            if (!isMyTurn) {
-                // console.log('Cannot select card: not my turn'); // 注释掉或删除
-                return false;
-            }
-
+            if (!isMyTurn) return false;
             if (isFirstPlayerInRound) {
-                // console.log('Validating for first player'); // 注释掉或删除
-                if (currentSelected.length === 0) {
-                    //  console.log('Allowing selection of first card'); // 注释掉或删除
-                    return true; 
-                }
-                
-                // 检查加入这张牌后，当前选中的牌是否构成一个有效的牌型
-                // 注意：这可能过于严格，不允许玩家逐步构建复杂牌型（如拖拉机）
-                // 更好的方法可能是检查是否 *可能* 构成有效牌型，但这更复杂
+                if (currentSelected.length === 0) return true;
                 const potentialSelection = [...currentSelected, card];
-                const isValid = isValidCardPattern(potentialSelection, mainSuit, commonMain);
-                
-                if (isValid) {
-                    // console.log('Potential selection is a valid pattern:', potentialSelection); // 注释掉或删除
-                    return true;
+                return isValidCardPattern(potentialSelection, preGameState.mainSuit, preGameState.commonMain);
                 } else {
-                    // console.log('Potential selection is NOT a valid pattern, but allowing selection for now.'); // 注释掉或删除
-                    return true; 
-                }
-            } 
-            // --- 跟牌时的验证 ---
-            else {
-                console.log('Validating for following player');
-                // 需要获取领出玩家出的牌信息，特别是数量
-                // const leadingPlay = roundCards?.[0]; // 假设 roundCards 存在且包含上一轮信息
-                // if (!leadingPlay) {
-                //     console.error("无法获取领出信息，无法验证跟牌");
-                //     return false; // 或者允许选择，依赖最终验证
-                // }
-                
-                // // 基础检查：不允许选择超过领出数量的牌
-                // if (currentSelected.length >= leadingPlay.cards.length) {
-                //     console.log('Cannot select more cards than leading play');
-                //     return false;
-                // }
-
-                // TODO: 实现更复杂的跟牌验证逻辑（如花色、大小）
-                console.log('Follow play validation in validator is basic. Allowing selection.');
-                return true; // 暂时允许选择，依赖最终出牌验证
+                if (!leadingPlay || !leadingPlay.cards) return true;
+                return currentSelected.length < leadingPlay.cards.length;
             }
         }
-        // 依赖项需要包括所有用到的状态
-    }), [isMyTurn, isFirstPlayerInRound, commonMain, mainSuit, isValidCardPattern /*, roundCards */]); 
+    }), [isMyTurn, isFirstPlayerInRound, preGameState.commonMain, preGameState.mainSuit, leadingPlay]);
 
-    // 计算牌的权重（用于排序）
-    const getCardWeight = useCallback((card) => {
-        // 大小王权重
-        if (card.suit === 'JOKER') {
-            return card.value === 'BIG' ? 10000 : 9999;
-        }
-
-        const suitWeights = {
-            'HEARTS': 400,
-            'SPADES': 300,
-            'DIAMONDS': 200,
-            'CLUBS': 100
-        };
-
-        // 基础权重
-        let weight = suitWeights[card.suit];
-
-        // 如果是当前常主
-        if (card.value === preGameState.commonMain) {
-            return 9000 + weight;  // 放在大小王之后
-        }
-
-        // 常主牌的权重计算
-        const commonMainValues = ['5', '3', '2'];  // 固定常主
-        const normalValues = ['4', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-        
-        // 固定常主的权重计算（5、3、2的顺序）
-        if (commonMainValues.includes(card.value)) {
-            const valueIndex = commonMainValues.indexOf(card.value);
-            const baseWeight = 9000 - valueIndex * 100; // 5是9000，3是8900，2是8800
-            
-            if (card.suit === mainSuit) {
-                return baseWeight; // 主花色的固定常主
-            } else {
-                return baseWeight - 50; // 副花色的固定常主
-            }
-        }
-        
-        // 普通牌
-        if (normalValues.includes(card.value)) {
-            weight += normalValues.indexOf(card.value) * 10;
-        }
-
-        return weight;
-    }, [mainSuit, preGameState.commonMain]);
-
-    // 排序牌
-    const sortCards = useCallback((cards) => {
-        console.log('排序函数收到的牌数量:', cards.length);
-        console.log('排序前的牌:', JSON.stringify(cards));
-        
-        if (!cards || !Array.isArray(cards)) {
-            console.error('排序函数收到的不是数组');
-            return [];
-        }
-        
-        const sortedCards = [...cards].sort((a, b) => getCardWeight(b) - getCardWeight(a));
-        console.log('排序后的牌数量:', sortedCards.length);
-        console.log('排序后的牌:', JSON.stringify(sortedCards));
-        
-        return sortedCards;
-    }, [getCardWeight]);
-
-    // 检查是否有大小王
     const hasJoker = useCallback((value) => {
-        return playerCards.some(card => 
-            card.suit === 'JOKER' && card.value === value
-        );
+        return playerCards.some(card => card.suit === 'JOKER' && card.value === value);
     }, [playerCards]);
 
-    // 检查是否有大小王对子
     const hasJokerPair = useCallback((value) => {
-        return playerCards.filter(card => 
-            card.suit === 'JOKER' && card.value === value
-        ).length === 2;
+        return playerCards.filter(card => card.suit === 'JOKER' && card.value === value).length === 2;
     }, [playerCards]);
 
-    // 获取某花色的对子
     const getPairs = useCallback((suit) => {
         const pairs = {};
         playerCards.forEach(card => {
@@ -693,636 +188,250 @@ function GameLayout() {
                 pairs[card.value] = (pairs[card.value] || 0) + 1;
             }
         });
-        return Object.entries(pairs)
-            .filter(([_, count]) => count >= 2)
-            .map(([value]) => value);
+        return Object.entries(pairs).filter(([_, count]) => count >= 2).map(([value]) => value);
     }, [playerCards]);
 
-    // 处理大小王选择
     const handleJokerSelect = (value) => {
         setSelectedJoker(value);
         setSelectedPair(null);
     };
 
-    // 处理对子选择
     const handlePairSelect = (suit, value) => {
         setSelectedPair({ suit, value });
     };
 
-    // 处理叫主
     const handleCallMain = () => {
-        if (canCallMain) {
-            socket.emit('callMain', {
-                roomId: localStorage.getItem('roomId'),
-                mainSuit: selectedPair?.suit,
-                mainCards: {
-                    joker: selectedJoker,
-                    pair: selectedPair
-                }
-            });
+        if (preGameState.canCallMain) {
+            socket.emit('callMain', { roomId: localStorage.getItem('roomId'), mainSuit: selectedPair?.suit, mainCards: { joker: selectedJoker, pair: selectedPair } });
         }
     };
 
-    // 添加新的函数来检查是否可以加固
     const checkCanFixMain = useCallback((usedJoker) => {
-        console.log('检查是否可以加固，使用的王为:', usedJoker);
-        // 如果没有使用王牌叫主，则不能加固
         if (!usedJoker) {
-            setCanFixMain(false);
+            setPreGameState(prev => ({ ...prev, canFixMain: false }));
             return;
         }
-        
-        // 检查是否有两张相同的王
-        const jokerCount = playerCards.filter(card => 
-            card.suit === 'JOKER' && card.value === usedJoker
-        ).length;
-        
-        console.log('找到相同的王数量:', jokerCount);
-        
-        // 只有在有两张相同的王，并且游戏状态允许加固时才能加固
-        setCanFixMain(jokerCount >= 2 && preGameState.canStealMain && !isMainFixed);
-    }, [playerCards, preGameState.canStealMain, isMainFixed]);
+        const jokerCount = playerCards.filter(card => card.suit === 'JOKER' && card.value === usedJoker).length;
+        setPreGameState(prev => ({ ...prev, canFixMain: jokerCount >= 2 && prev.canStealMain && !prev.isMainFixed }));
+    }, [playerCards]);
 
-    // 添加 useCallback 包装
     const checkCanCounterMain = useCallback(() => {
-        // 检查是否有两张相同的王和一对牌
-        const hasBigJokerPair = hasJokerPair('BIG');
-        const hasSmallJokerPair = hasJokerPair('SMALL');
-        const hasPair = Object.values(getPairs('HEARTS')).length > 0 || 
-                       Object.values(getPairs('SPADES')).length > 0 || 
-                       Object.values(getPairs('DIAMONDS')).length > 0 || 
-                       Object.values(getPairs('CLUBS')).length > 0;
-        
-        setCanCounterMain((hasBigJokerPair || hasSmallJokerPair) && hasPair);
-    // 添加依赖项：它依赖的函数 hasJokerPair 和 getPairs
-    // 这两个函数本身也应该用 useCallback 包裹，并依赖 playerCards
+        const hasBigJokerPairValue = hasJokerPair('BIG');
+        const hasSmallJokerPairValue = hasJokerPair('SMALL');
+        const hasAnyPair = Object.values(getPairs('HEARTS')).length > 0 || Object.values(getPairs('SPADES')).length > 0 || Object.values(getPairs('DIAMONDS')).length > 0 || Object.values(getPairs('CLUBS')).length > 0;
+        setPreGameState(prev => ({ ...prev, canCounterMain: (hasBigJokerPairValue || hasSmallJokerPairValue) && hasAnyPair }));
     }, [hasJokerPair, getPairs]); 
 
-    // 处理反主
     const handleCounterMain = () => {
-        if (canCounterMain && counterJoker && counterPair) {
-            socket.emit('counterMain', {
-                roomId: localStorage.getItem('roomId'),
-                mainSuit: counterPair.suit,
-                mainCards: {
-                    joker: counterJoker,
-                    pair: counterPair
-                }
-            });
-            
-            // 本地先设置为已反主
-            setHasCounteredMain(true);
+        if (preGameState.canCounterMain && preGameState.counterJoker && preGameState.counterPair) {
+            socket.emit('counterMain', { roomId: localStorage.getItem('roomId'), mainSuit: preGameState.counterPair.suit, mainCards: { joker: preGameState.counterJoker, pair: preGameState.counterPair } });
+            setPreGameState(prev => ({ ...prev, hasCounteredMain: true }));
         }
     };
 
-    // 添加加固的处理
     const handleFixMain = () => {
-        if (canFixMain && !isMainFixed) {
-            socket.emit('fixMain', {
-                roomId: localStorage.getItem('roomId')
-            });
+        if (preGameState.canFixMain && !preGameState.isMainFixed) {
+            socket.emit('fixMain', { roomId: localStorage.getItem('roomId') });
         }
     };
 
-    // 添加检查是否可以粘牌的函数
     const checkCanStickCards = useCallback(() => {
-        // 如果是叫主玩家或已经有人粘牌，则不能粘牌
-        if (mainCaller === socket.id || hasStickCards) {
-            setCanStickCards(false);
+        if (preGameState.mainCaller === socket.id || preGameState.hasStickCards) {
+            setPreGameState(prev => ({ ...prev, canStickMain: false }));
             return;
         }
-
-        // 检查是否有王
-        const hasJoker = playerCards.some(card => card.suit === 'JOKER');
-        if (!hasJoker) {
-            setCanStickCards(false);
+        const hasAnyJokerValue = playerCards.some(card => card.suit === 'JOKER');
+        if (!hasAnyJokerValue) {
+            setPreGameState(prev => ({ ...prev, canStickMain: false }));
             return;
         }
-
-        // 检查是否有连对
         const suitPairs = {};
         playerCards.forEach(card => {
             if (card.suit !== 'JOKER') {
-                if (!suitPairs[card.suit]) {
-                    suitPairs[card.suit] = {};
-                }
+                if (!suitPairs[card.suit]) suitPairs[card.suit] = {};
                 suitPairs[card.suit][card.value] = (suitPairs[card.suit][card.value] || 0) + 1;
             }
         });
-
-        // 检查每个花色是否有连对
-        const hasConsecutivePair = Object.values(suitPairs).some(suitCards => {
-            const values = Object.entries(suitCards)
-                .filter(([_, count]) => count >= 2)
-                .map(([value]) => value);
-            
-            // 检查是否有相邻的值
+        const hasAnyConsecutivePair = Object.values(suitPairs).some(suitCards => {
+            const values = Object.entries(suitCards).filter(([_, count]) => count >= 2).map(([value]) => value);
             for (let i = 0; i < values.length - 1; i++) {
-                const currentValue = values[i];
-                const nextValue = values[i + 1];
-                if (isConsecutive(currentValue, nextValue)) {
-                    return true;
-                }
+                if (isConsecutive(values[i], values[i + 1])) return true;
             }
             return false;
         });
+        setPreGameState(prev => ({ ...prev, canStickMain: hasAnyJokerValue && hasAnyConsecutivePair }));
+    }, [playerCards, preGameState.mainCaller, preGameState.hasStickCards]);
 
-        setCanStickCards(hasJoker && hasConsecutivePair);
-    }, [playerCards, mainCaller, hasStickCards]);
-
-    // 判断两个牌值是否相邻
-    const isConsecutive = (value1, value2) => {
-        const values = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-        const index1 = values.indexOf(value1);
-        const index2 = values.indexOf(value2);
-        return Math.abs(index1 - index2) === 1;
-    };
-
-    // 处理粘牌按钮点击
     const handleStickCards = () => {
-        if (canStickCards) {
-            socket.emit('stickCards', {
-                roomId: localStorage.getItem('roomId')
-            });
-            setHasStickCards(true);
+        if (preGameState.canStickMain) {
+            socket.emit('stickCards', { roomId: localStorage.getItem('roomId') });
         }
     };
 
-    // 处理选择要交换的牌
     const handleSelectStickCards = (card) => {
-        if (!isStickPhase || hasStickCards) return;
-
-        // 如果点击已选中的牌，则取消选择
-        if (selectedStickCards.commonMain && 
-            selectedStickCards.commonMain.suit === card.suit && 
-            selectedStickCards.commonMain.value === card.value) {
-            setSelectedStickCards(prev => ({
-                ...prev,
-                commonMain: null
-            }));
+        if (!preGameState.isStickPhase || preGameState.hasStickCards) return;
+        if (preGameState.selectedCardsForSticking.commonMain && preGameState.selectedCardsForSticking.commonMain.suit === card.suit && preGameState.selectedCardsForSticking.commonMain.value === card.value) {
+            setPreGameState(prev => ({ ...prev, selectedCardsForSticking: { ...prev.selectedCardsForSticking, commonMain: null } }));
             return;
         }
-
-        if (selectedStickCards.suitCards.some(c => 
-            c.suit === card.suit && c.value === card.value)) {
-            setSelectedStickCards(prev => ({
-                ...prev,
-                suitCards: prev.suitCards.filter(c => 
-                    !(c.suit === card.suit && c.value === card.value))
-            }));
+        if (preGameState.selectedCardsForSticking.suitCards.some(c => c.suit === card.suit && c.value === card.value)) {
+            setPreGameState(prev => ({ ...prev, selectedCardsForSticking: { ...prev.selectedCardsForSticking, suitCards: prev.selectedCardsForSticking.suitCards.filter(c => !(c.suit === card.suit && c.value === card.value)) } }));
             return;
         }
-
-        // 如果是常主或固定常主
-        if (card.value === commonMain || ['2', '3', '5'].includes(card.value)) {
-            setSelectedStickCards(prev => ({
-                ...prev,
-                commonMain: card
-            }));
-        }
-        // 如果是主花色的牌且还没选够两张
-        else if (card.suit === mainSuit && selectedStickCards.suitCards.length < 2) {
-            setSelectedStickCards(prev => ({
-                ...prev,
-                suitCards: [...prev.suitCards, card]
-            }));
+        if (card.value === preGameState.commonMain || ['2', '3', '5'].includes(card.value)) {
+            setPreGameState(prev => ({ ...prev, selectedCardsForSticking: { ...prev.selectedCardsForSticking, commonMain: card } }));
+        } else if (card.suit === preGameState.mainSuit && preGameState.selectedCardsForSticking.suitCards.length < 2) {
+            setPreGameState(prev => ({ ...prev, selectedCardsForSticking: { ...prev.selectedCardsForSticking, suitCards: [...prev.selectedCardsForSticking.suitCards, card] } }));
         }
     };
 
-    // 修改通用的卡牌选择处理函数
     const handleCardSelect = (card) => {
-        console.log('[选牌检查] 点击的牌:', card);
-        console.log('[选牌检查] 当前状态:', { 
-            gamePhase, 
-            isMyTurn, 
-            isBottomDealer, 
-            cardSelectionValidator: typeof cardSelectionValidator, 
-            isFirstPlayerInRound 
-        });
-        // --- 添加日志 ---
-        console.log('[选牌检查] 点击的牌:', card);
-        console.log('[选牌检查] 当前状态:', { 
-            gamePhase, 
-            isMyTurn, 
-            isBottomDealer, 
-            cardSelectionValidator: typeof cardSelectionValidator, // 检查验证器类型
-            isFirstPlayerInRound
-        });
-        // ---------------
-
-        // 如果是抠底阶段
-        if (gamePhase === 'bottomDeal' && isBottomDealer) {
+        if (gamePhase === 'bottomDeal' && preGameState.isBottomDealer) {
             handleBottomCardSelect(card);
             return;
         }
-
-        // 出牌阶段
-        if (gamePhase === 'playing') {
-            // console.log('In playing phase, validator:', cardSelectionValidator ? 'exists' : 'null'); // 这个日志可以保留或移除
-        } else {
-            // --- 添加日志 ---
-             console.log(`[选牌检查] 游戏阶段 (${gamePhase}) 不是 playing，无法选牌`);
-            // ---------------
-            return; // 如果不是 playing 阶段，直接返回
-        }
-
-
-        // 原有的选牌逻辑
-        if (!cardSelectionValidator) {
-             // --- 添加日志 ---
-            console.log('[选牌检查] 卡牌选择验证器 (cardSelectionValidator) 不存在，无法选牌');
-             // ---------------
-            return;
-        }
-
+        if (gamePhase !== 'playing') return;
+        if (!cardSelectionValidator) return;
         const cardIndex = playerCards.findIndex(c => c === card);
-        console.log('Card index:', cardIndex);
-        
-        const isCardSelected = selectedCards.some(c => {
-            const selectedIndex = playerCards.findIndex(pc => pc === c);
-            return selectedIndex === cardIndex;
-        });
-        
-        console.log('Is card already selected:', isCardSelected);
-
+        const isCardSelected = selectedCards.some(c => playerCards.findIndex(pc => pc === c) === cardIndex);
         if (isCardSelected) {
-            // 取消选中
-            setSelectedCards(prev => 
-                prev.filter(c => {
-                    const selectedIndex = playerCards.findIndex(pc => pc === c);
-                    return selectedIndex !== cardIndex;
-                })
-            );
+            setSelectedCards(prev => prev.filter(c => playerCards.findIndex(pc => pc === c) !== cardIndex));
         } else {
-            const canSelectCard = cardSelectionValidator(card, selectedCards);
-            console.log('Can select card according to validator:', canSelectCard);
-            
-            if (canSelectCard) {
+            if (cardSelectionValidator(card, selectedCards)) {
                 setSelectedCards(prev => [...prev, card]);
             }
         }
     };
 
-    // 修改进入粘牌/游戏阶段的逻辑 - 调整依赖项
     useEffect(() => {
-        console.log(`[Effect 验证器检查] Effect Update Validator Runs - gamePhase: ${gamePhase}`);
-        const stickValidator = validators.stickPhase;
         const gamingValidator = validators.gaming;
-
-        if (gamePhase === 'stickPhase') { /* ... */ } 
-        else if (gamePhase === 'playing' || gamePhase === 'gaming') { 
-            console.log("[Effect 验证器检查] 正在设置 validator to gamingValidator"); // 添加日志
+        if (gamePhase === 'playing' || gamePhase === 'gaming') {
             setMaxSelectableCards(100); 
-            setCardSelectionValidator(() => gamingValidator); // 确认这行被执行
-            console.log("[Effect 验证器检查] setCardSelectionValidator 已调用 (设置为 gaming)"); // 添加日志
+            setCardSelectionValidator(() => gamingValidator);
         } else { 
-            console.log("[Effect 验证器检查] 正在设置 validator to null"); // 添加日志
             setMaxSelectableCards(0);
             setCardSelectionValidator(null);
-             console.log("[Effect 验证器检查] setCardSelectionValidator 已调用 (设置为 null)"); // 添加日志
         }
-    }, [gamePhase, mainSuit, commonMain, validators]); // 保持这个依赖项，因为内部访问了 validators
+    }, [gamePhase, validators]);
 
-    // 修改确认交换的处理函数
     const handleConfirmStickCards = () => {
-        if (selectedCards.length === 3) {
-            const commonMainCard = selectedCards[0];
-            const suitCards = selectedCards.slice(1);
-            
-            socket.emit('confirmStickCards', {
-                roomId: localStorage.getItem('roomId'),
-                cards: {
-                    commonMain: commonMainCard,
-                    suitCards: suitCards
-                }
-            });
-
-            // 清理相关状态
-            setStickMainTimeLeft(null);
-            setCanStickCards(false);
+        const { commonMain, suitCards } = preGameState.selectedCardsForSticking;
+        if (commonMain && suitCards.length === 2) {
+            socket.emit('confirmStickCards', { roomId: localStorage.getItem('roomId'), cards: { commonMain, suitCards } });
+            setPreGameState(prev => ({ ...prev, stickMainTimeLeft: null, canStickMain: false }));
         }
     };
 
-    // 将监听器设置分离为专门的useEffect，不依赖频繁变化的状态
     useEffect(() => {
-        console.log('设置 socket 监听器');
-        
-        // 监听游戏开始
-        socket.on('gameStart', () => {
-            console.log('收到游戏开始事件');
+        const currentRoomId = localStorage.getItem('roomId');
+        if (!socket.id || !currentRoomId) {
+            if (!socket.id) console.log('[GameLayout Consolidated Effect] Waiting for socket.id.');
+            if (!currentRoomId) console.error('[GameLayout Consolidated Effect] No roomId found.');
+            return;
+        }
+
+        const effectHandleGameStart = () => {
             setGamePhase('pregame');
-            setIsDealing(true);
-            setDealingProgress(0);
-            console.log('发送 clientReady 信号');
-            socket.emit('clientReady');
-        });
-        
-        // 监听单轮发牌
-        socket.on('receiveCard', ({ card, cardIndex, totalCards }) => {
-            console.log('收到一张牌:', card, '索引:', cardIndex, '总牌数:', totalCards);
-            
-            setPlayerCards(prev => {
-                // 创建一个新数组，保留所有现有牌，包括底牌
-                const updatedCards = [...prev];
-                
-                // 如果索引在合理范围内，直接更新
-                if (cardIndex >= 0 && cardIndex < totalCards) {
-                    // 保留所有isFromBottom标记的牌
-                    const bottomCards = prev.filter(c => c.isFromBottom);
-                    
-                    // 把这张新牌放到正确的位置
-                    const normalCards = prev.filter(c => !c.isFromBottom);
-                    if (cardIndex < normalCards.length) {
-                        normalCards[cardIndex] = card;
-                    } else {
-                        // 如果索引超出范围，直接添加
-                        normalCards.push(card);
-                    }
-                    
-                    // 合并普通牌和底牌，并排序
-                    return sortCards([...normalCards, ...bottomCards]);
-                }
-                
-                // 直接添加到牌组末尾并排序
-                updatedCards.push(card);
-                return sortCards(updatedCards);
-            });
-        });
-
-        // 监听发牌进度
-        socket.on('dealingProgress', ({ currentRound, totalRounds }) => {
-            // console.log(`发牌进度更新: ${currentRound}/${totalRounds}`);
-            const progress = (currentRound / totalRounds) * 100;
-            setDealingProgress(progress);
-            if (currentRound === totalRounds) {
-                console.log('发牌完成');
-                setIsDealing(false);
-                setDealingProgress(100);
-            }
-        });
-
-        // 监听游戏状态更新
-        socket.on('updateGameState', (gameState) => {
-            console.log('游戏状态更新:', gameState);
-            if (gameState.phase) {
-                setGamePhase(gameState.phase);
-                // 如果进入粘牌阶段，设置相关状态
-                if (gameState.phase === 'stickPhase') {
-                    setIsStickPhase(true);
-                }
-            }
-            
-            if (gameState.preGameState) {
-                setPreGameState(gameState.preGameState);
-                setIsDealing(gameState.preGameState.isDealing);
-                setCanCallMain(gameState.preGameState.canCallMain);
-                
-                // 添加常主更新
-                if (gameState.preGameState.commonMain) {
-                    setCommonMain(gameState.preGameState.commonMain);
-                }
-                
-                // 处理叫主截止时间
-                if (gameState.preGameState.callMainDeadline) {
-                    setCallMainDeadline(gameState.preGameState.callMainDeadline);
-                }
-                
-                // 处理反主截止时间
-                if (gameState.preGameState.stealMainDeadline) {
-                    setStealMainDeadline(gameState.preGameState.stealMainDeadline);
-                }
-
-                // 处理粘牌状态
-                if (gameState.preGameState.canStickMain !== undefined) {
-                    setCanStickCards(gameState.preGameState.canStickMain);
-                }
-                
-                // 处理粘牌截止时间
-                if (gameState.preGameState.stickMainDeadline) {
-                    setStickMainDeadline(gameState.preGameState.stickMainDeadline);
-                }
-            }
-            
-            // 同步加固状态
-            if (gameState.isMainFixed !== undefined) {
-                setIsMainFixed(gameState.isMainFixed);
-            }
-        });
-
-        // 监听叫主事件
-        socket.on('mainCalled', ({ mainSuit, mainCaller, mainCards, stealMainDeadline }) => {
-            console.log('有人叫主:', { mainSuit, mainCaller, mainCards, stealMainDeadline });
-            setMainSuit(mainSuit);
-            setMainCaller(mainCaller);
-            setMainCards(mainCards);
-            setMainCalled(true);
-            
-            // 明确设置是否是叫主玩家的状态
-            const isCurrentPlayerMainCaller = mainCaller === socket.id;
-            setIsMainCaller(isCurrentPlayerMainCaller);
-            
-            // 处理反主截止时间
-            if (stealMainDeadline) {
-                setStealMainDeadline(stealMainDeadline);
-            }
-        });
-
-        // 加固监听
-        socket.on('mainFixed', (data) => {
-            console.log('主花色已加固:', data);
-            setCanCounterMain(false);
-            setIsMainFixed(true);
-            
-            // 添加显示其他玩家的加固状态逻辑
-            if (data.mainCaller !== socket.id) {
-                // 其他玩家已加固，可以显示消息
-                console.log(`玩家 ${data.mainCaller} 已加固主花色`);
-            }
-            
-            setPreGameState(prev => ({
-                ...prev,
-                canStealMain: false
-            }));
-        });
-
-        // 反主监听
-        socket.on('mainCountered', ({ mainCaller, originalMainCaller, mainSuit, mainCards }) => {
-            console.log('有人反主:', { mainCaller, originalMainCaller, mainSuit, mainCards });
-            
-            // 更新主叫者、主花色和牌型信息
-            setMainCaller(mainCaller);
-            setMainSuit(mainSuit);  // 设置为反主玩家的花色
-            setMainCards(mainCards);
-            
-            // 反主后的状态处理
-            setShowFixButton(false);  // 隐藏加固按钮
-            setStealMainDeadline(null); // 清除反主/加固截止时间
-            setStealMainTimeLeft(null); // 清除倒计时显示
-            
-            // 如果当前玩家是反主玩家，设置为已反主
-            if (socket.id === mainCaller) {
-                setHasCounteredMain(true);
-            }
-            
-            // 更新状态，不可再反主
-            setCanCounterMain(false);
-            
-            // 更新 preGameState
-            setPreGameState(prev => ({
-                ...prev,
-                canStealMain: false
-            }));
-        });
-
-        // 添加粘牌事件监听
-        socket.on('playerStickCards', ({ playerId, mainCallerCards }) => {
-            console.log('收到粘牌信息:', { playerId, mainCallerCards });
-            // 设置叫主玩家的牌
-            setMainCallerCards([
-                { suit: 'JOKER', value: mainCallerCards.joker },
-                { suit: mainCallerCards.pair.suit, value: mainCallerCards.pair.value },
-                { suit: mainCallerCards.pair.suit, value: mainCallerCards.pair.value }
-            ]);
-        });
-
-        // 添加交换完成的监听
-        socket.on('cardsExchanged', ({ mainPlayer, stickPlayer }) => {
-            console.log('Cards exchanged:', { mainPlayer, stickPlayer });
-            // 清除所有相关状态
+            setIsLoadingPlayers(true);
+            setPlayersInfo([]);
+            setPreGameState(prev => ({ ...prev, commonMain: '2', isDealing: true, dealingProgress: 0, mainCalled: false, mainSuit: null, mainCaller: null, mainCards: null, isMainFixed: false, hasCounteredMain: false, canCallMain: false, bottomCards: [], selectedBottomCards: [], cardsFromBottom: [], interactedBottomCards: new Set() }));
+            setPlayerCards([]);
             setSelectedCards([]);
-            setHasStickCards(false);
-            setCanStickCards(false);
-            setIsStickPhase(false);
-            setStickMainTimeLeft(null);
-            setStickMainDeadline(null);
-            setMainCallerCards(null);
-            // 清除反主相关状态
-            setShowCounterButton(false);
-            setCanCounterMain(false);
-            setStealMainTimeLeft(null);
-            setStealMainDeadline(null);
-            setCounterJoker(null);
-            setCounterPair(null);
-        });
-
-        // 添加交换错误的监听
-        socket.on('exchangeError', ({ message }) => {
-            console.log('Exchange error:', message);
-            // 这里可以添加错误提示
-        });
-
-        // 修改接收底牌的监听器
-        socket.on('receiveBottomCards', ({ bottomCards }) => {
-            console.log('客户端收到的底牌数据:', bottomCards);
-            console.log('底牌数量:', bottomCards ? bottomCards.length : 0);
-            setBottomCards(bottomCards || []);
-            setIsBottomDealer(true);
-            
-            // 记录底牌的标识，用于高亮显示
-            const bottomCardIds = (bottomCards || []).map(card => `${card.suit}-${card.value}`);
-            setCardsFromBottom(bottomCardIds);
-            
-            // 不再在这里更新手牌，由服务器通过 updatePlayerCards 事件更新
-        });
-
-        // 监听抠底错误
-        socket.on('bottomDealError', ({ message }) => {
-            // 这里可以添加错误提示
-            console.error(message); // <--- 将 consoleerror 改为 console.error
-        });
-
-        // 监听更新玩家手牌，恢复排序
-        socket.on('updatePlayerCards', (cards) => {
-            console.log('Received updated player cards:', cards);
-            console.log('Cards type:', typeof cards);
-            console.log('Is array:', Array.isArray(cards));
-            
-            if (!Array.isArray(cards)) {
-                console.error('接收到的牌不是数组');
-                return;
+            setPlayedCardsInfo({});
+            setLeadingPlay(null);
+            setCurrentPlayer(null);
+            setIsMyTurn(false);
+            setIsFirstPlayerInRound(false);
+            setMaxSelectableCards(0);
+            setCardSelectionValidator(null);
+        };
+        const effectHandleReceiveCard = ({ card }) => {
+            setPlayerCards(prevCards => sortCards([...prevCards, card], preGameState.mainSuit, preGameState.commonMain));
+        };
+        const effectHandleDealingProgress = ({ currentRound, totalRounds }) => {
+            const progress = (currentRound / totalRounds) * 100;
+            setPreGameState(prev => ({ ...prev, dealingProgress: progress }));
+            if (currentRound === totalRounds) {
+                setPreGameState(prev => ({ ...prev, isDealing: false, dealingProgress: 100 }));
             }
-            
-            // 更新底牌标识列表
-            const bottomCardIds = cards
-                .filter(card => card.isFromBottom)
-                .map(card => `${card.suit}-${card.value}`);
-            
-            if (bottomCardIds.length > 0) {
-                console.log('底牌数量:', bottomCardIds.length);
-                console.log('底牌标识:', bottomCardIds);
-                setCardsFromBottom(bottomCardIds);
+        };
+        const effectHandleUpdateGameState = (newServerState) => {
+            if (newServerState.phase) setGamePhase(newServerState.phase);
+            if (newServerState.preGameState) {
+                setPreGameState(prev => {
+                    const updated = { ...prev, ...newServerState.preGameState };
+                    if (newServerState.preGameState.interactedBottomCards && Array.isArray(newServerState.preGameState.interactedBottomCards)) {
+                        updated.interactedBottomCards = new Set(newServerState.preGameState.interactedBottomCards);
+                    } else if (!newServerState.preGameState.interactedBottomCards) {
+                        updated.interactedBottomCards = prev.interactedBottomCards instanceof Set ? prev.interactedBottomCards : new Set();
+                    }
+                    return updated;
+                });
             }
-            
-            // 排序玩家手牌
-            setPlayerCards(sortCards(cards));
-        });
-
-        // 监听游戏阶段变化
-        socket.on('gamePhaseChanged', (data) => {
-            console.log('[客户端] 收到了 gamePhaseChanged 事件:', data); 
+        };
+        const effectHandleMainCalled = ({ mainSuit, mainCaller, mainCards, stealMainDeadline }) => {
+            setPreGameState(prev => ({ ...prev, mainSuit, mainCaller, mainCards, mainCalled: true, isMainCaller: mainCaller === socket.id, stealMainDeadline: stealMainDeadline || prev.stealMainDeadline, canStealMain: true, isMainFixed: false }));
+        };
+        const effectHandleMainFixed = () => {
+            setPreGameState(prev => ({ ...prev, isMainFixed: true, canStealMain: false, stealMainDeadline: null, stealMainTimeLeft: null }));
+        };
+        const effectHandleMainCountered = ({ mainCaller, mainSuit, mainCards }) => {
+            setPreGameState(prev => ({ ...prev, mainCaller, mainSuit, mainCards, hasCounteredMain: true, isMainCaller: mainCaller === socket.id, isMainFixed: false, canStealMain: false, stealMainDeadline: null, stealMainTimeLeft: null }));
+        };
+        const effectHandlePlayerStickCards = ({ mainCallerCards }) => {
+            setPreGameState(prev => ({ ...prev, mainCallerCardsForSticking: mainCallerCards, isStickPhase: true }));
+        };
+        const effectHandleCardsExchanged = () => {
+            setPreGameState(prev => ({ ...prev, hasStickCards: false, canStickMain: false, isStickPhase: false, stickMainTimeLeft: null, stickMainDeadline: null, mainCallerCardsForSticking: null, selectedCardsForSticking: { commonMain: null, suitCards: [] }, canStealMain: false, stealMainDeadline: null, stealMainTimeLeft: null, showCounterButton: false, counterJoker: null, counterPair: null }));
+            setSelectedCards([]);
+        };
+        const effectHandleExchangeError = ({ message }) => { console.error('[GameLayout Consolidated Effect] Event: exchangeError', message); };
+        const effectHandleUpdatePlayerCards = (cards) => {
+            if (!Array.isArray(cards)) { console.error('Received player cards are not an array'); return; }
+            const bottomCardIdsFromPlayerHand = cards.filter(card => card.isFromBottom).map(card => `${card.suit}-${card.value}`);
+            if (bottomCardIdsFromPlayerHand.length > 0) {
+                setPreGameState(prev => ({ ...prev, cardsFromBottom: bottomCardIdsFromPlayerHand }));
+            }
+            setPlayerCards(sortCards(cards, preGameState.mainSuit, preGameState.commonMain));
+        };
+        const effectHandleReceiveBottomCards = ({ bottomCards: rcvBottomCards, bottomDealDeadline: newDeadline }) => {
+            const bottomIds = (rcvBottomCards || []).map(c => `${c.suit}-${c.value}`);
+            setPreGameState(prev => ({ ...prev, bottomCards: rcvBottomCards || [], isBottomDealer: true, cardsFromBottom: bottomIds, bottomDealDeadline: newDeadline || prev.bottomDealDeadline }));
+        };
+        const effectHandleBottomDealError = ({ message }) => { console.error('[GameLayout Consolidated Effect] Event: bottomDealError', message); };
+        const effectHandleGamePhaseChanged = (data) => {
             if (data.phase === 'playing') {
                 setGamePhase('playing');
-                console.log('[客户端] setGamePhase(\'playing\') 已调用'); // 添加日志
-                if (data.currentPlayer === socket.id) {
-                    setIsMyTurn(true);
-                    console.log('[客户端] setIsMyTurn(true) 已调用 (来自 gamePhaseChanged)'); // 添加日志
-                }
+                if (data.currentPlayer === socket.id) setIsMyTurn(true);
                 setCurrentPlayer(data.currentPlayer);
             }
-        });
-        
-        // 监听轮到谁出牌
-        socket.on('playerTurn', (data) => {
-            console.log('[客户端] 收到了 playerTurn 事件:', data); 
+        };
+        const effectHandlePlayerTurn = (data) => {
             setCurrentPlayer(data.player);
-            const isCurrentPlayerTurn = data.player === socket.id;
-            setIsMyTurn(isCurrentPlayerTurn);
-            console.log(`[客户端] setIsMyTurn(${isCurrentPlayerTurn}) 已调用 (来自 playerTurn)`); // 添加日志
+            setIsMyTurn(data.player === socket.id);
             setIsFirstPlayerInRound(data.isFirstPlayer); 
-            console.log(`[客户端] setIsFirstPlayerInRound(${data.isFirstPlayer}) 已调用`); // 添加日志
-        });
-        
-        // 监听其他玩家出牌
-        socket.on('cardPlayed', (data) => {
-            console.log(`玩家 ${data.player} 出了 ${data.cards.length} 张牌`);
-            // TODO: 在界面上显示其他玩家出的牌
-        });
-        
-        // 监听轮次结束
-        socket.on('roundEnd', (data) => {
-            console.log(`本轮结束，玩家 ${data.winner} 获胜`);
-            
-            // 如果下一个出牌的是自己
+            setLeadingPlay(data.leadingPlay || null);
+            if (data.isFirstPlayer) setPlayedCardsInfo({});
+            if (data.player !== socket.id) setSelectedCards([]);
+        };
+        const effectHandleCardPlayed = (data) => {
+            setPlayedCardsInfo(prev => ({ ...prev, [data.player]: data.cards }));
+        };
+        const effectHandleRoundEnd = (data) => {
             if (data.nextPlayer === socket.id) {
                 setIsMyTurn(true);
-                setIsFirstPlayerInRound(true); // 添加这一行，因为轮次结束后的首个出牌玩家是第一个出牌者
+                setIsFirstPlayerInRound(true);
             } else {
-                setIsFirstPlayerInRound(false); // 添加这一行
+                setIsFirstPlayerInRound(false);
             }
-        });
-        
-        // 监听出牌错误
-        socket.on('playError', (data) => {
-            console.error(data.message);
-            // TODO: 显示错误信息
-        });
-
-        // 监听房间信息，确定玩家位置
-        socket.on('roomInfo', (room) => {
-            console.log('[客户端] 收到了 roomInfo 事件:', room); 
-            if (!room || !room.players) {
-                console.error("Received invalid roomInfo data", room);
-                setIsLoadingPlayers(false); // 即使出错也停止加载
-                return;
-            }
-
+            setLeadingPlay(null);
+        };
+        const effectHandlePlayError = (data) => { console.error('[GameLayout Consolidated Effect] Event: playError', data.message); };
+        const effectHandleRoomInfo = (room) => {
+            if (!room || !room.players) { setIsLoadingPlayers(false); return; }
             const selfId = socket.id;
             const playerIndex = room.players.findIndex(p => p.id === selfId);
-
-            console.log(`Self ID: ${selfId}, Found at index: ${playerIndex}, Total players: ${room.players.length}`); 
-
-            let orderedPlayers = []; 
-
+            let orderedPlayers = [];
             if (playerIndex !== -1 && room.players.length === 4) {
                 orderedPlayers = [
                     { ...room.players[playerIndex], position: 'bottom' },
@@ -1330,212 +439,139 @@ function GameLayout() {
                     { ...room.players[(playerIndex + 2) % 4], position: 'top' },
                     { ...room.players[(playerIndex + 3) % 4], position: 'left' },
                 ];
-                console.log("Calculated ordered players:", orderedPlayers); 
-                setPlayersInfo(orderedPlayers); 
-                setIsLoadingPlayers(false); // <--- 获取到有效数据后停止加载
             } else if (room.players.length > 0) { 
-                 console.warn(`Player count is ${room.players.length}, assigning default positions.`);
-                 const defaultOrderedPlayers = room.players.map((p, index) => {
-                     let position = ['bottom', 'right', 'top', 'left'][index];
-                     if(p.id === selfId) position = 'bottom'; 
-                     return {...p, position: position };
-                 });
-                 console.log('[客户端] 计算出的默认玩家位置:', defaultOrderedPlayers); 
-                 setPlayersInfo(defaultOrderedPlayers);
-                 setIsLoadingPlayers(false); // <--- 获取到有效数据后停止加载
-            } else {
-                 console.error("Could not determine player order or no players in room.");
-                 setPlayersInfo([]); 
-                 setIsLoadingPlayers(false); // <--- 即使出错也停止加载
+                orderedPlayers = room.players.map((p, i) => ({ ...p, position: p.id === selfId ? 'bottom' : ['right', 'top', 'left'][i % 3] }));
             }
-        });
+            setPlayersInfo(orderedPlayers);
+            setIsLoadingPlayers(false);
+        };
 
-        // 监听其他玩家出牌
-        socket.on('cardPlayed', (data) => {
-            console.log(`玩家 ${data.playerName || data.player} 出了 ${data.cards.length} 张牌:`, data.cards);
-            // 更新当前轮次的出牌信息
-            setPlayedCardsInfo(prev => ({
-                ...prev,
-                [data.player]: data.cards // 存储该玩家出的牌
-            }));
-        });
-        
-        // 监听轮到谁出牌 - 用于清空上一轮的出牌记录
-        socket.on('playerTurn', (data) => {
-            console.log('Received playerTurn event:', data);
-            setCurrentPlayer(data.player);
-            const isCurrentPlayerTurn = data.player === socket.id;
-            setIsMyTurn(isCurrentPlayerTurn);
-            setIsFirstPlayerInRound(data.isFirstPlayer); // 直接使用服务器的标志
-
-            // 如果是新一轮的第一个玩家出牌，清空上一轮的出牌显示
-            if (data.isFirstPlayer) {
-                console.log("New round started, clearing played cards display.");
-                setPlayedCardsInfo({});
-            }
-        });
-
-        // 监听轮次结束 (可选，也可以在 playerTurn 清理)
-        socket.on('roundEnd', (data) => {
-            // console.log(`本轮结束，玩家 ${data.winner} 获胜`);
-            // 清理出牌显示也可以放在这里，但 playerTurn isFirstPlayer 更及时
-            // setPlayedCardsInfo({}); 
-        });
+        console.log('[GameLayout Consolidated Effect] Setting up ALL listeners and emitting gameLayoutReadyForData.');
+        socket.on('gameStart', effectHandleGameStart);
+        socket.on('receiveCard', effectHandleReceiveCard);
+        socket.on('dealingProgress', effectHandleDealingProgress);
+        socket.on('updateGameState', effectHandleUpdateGameState);
+        socket.on('mainCalled', effectHandleMainCalled);
+        socket.on('mainFixed', effectHandleMainFixed);
+        socket.on('mainCountered', effectHandleMainCountered);
+        socket.on('playerStickCards', effectHandlePlayerStickCards);
+        socket.on('cardsExchanged', effectHandleCardsExchanged);
+        socket.on('exchangeError', effectHandleExchangeError);
+        socket.on('updatePlayerCards', effectHandleUpdatePlayerCards);
+        socket.on('receiveBottomCards', effectHandleReceiveBottomCards);
+        socket.on('bottomDealError', effectHandleBottomDealError);
+        socket.on('gamePhaseChanged', effectHandleGamePhaseChanged);
+        socket.on('playerTurn', effectHandlePlayerTurn);
+        socket.on('cardPlayed', effectHandleCardPlayed);
+        socket.on('roundEnd', effectHandleRoundEnd);
+        socket.on('playError', effectHandlePlayError);
+        socket.on('roomInfo', effectHandleRoomInfo);
+        socket.emit('gameLayoutReadyForData', { roomId: currentRoomId });
 
         return () => {
-            console.log('清理 socket 监听器');
-            socket.off('gameStart');
-            socket.off('receiveCard');
-            socket.off('dealingProgress');
-            socket.off('updateGameState');
-            socket.off('mainCalled');
-            socket.off('mainFixed');
-            socket.off('mainCountered');
-            socket.off('playerStickCards');
-            socket.off('cardsExchanged');
-            socket.off('exchangeError');
-            socket.off('updatePlayerCards');
-            socket.off('receiveBottomCards');
-            socket.off('bottomDealError');
-            socket.off('gamePhaseChanged');
-            socket.off('playerTurn');
-            socket.off('cardPlayed');
-            socket.off('roundEnd');
-            socket.off('playError');
-            socket.off('roomInfo');
-            socket.off('cardPlayed');
-            socket.off('playerTurn');
-            socket.off('roundEnd');
+            console.log('[GameLayout Consolidated Effect] Cleanup: Detaching ALL listeners.');
+            socket.off('gameStart', effectHandleGameStart);
+            socket.off('receiveCard', effectHandleReceiveCard);
+            socket.off('dealingProgress', effectHandleDealingProgress);
+            socket.off('updateGameState', effectHandleUpdateGameState);
+            socket.off('mainCalled', effectHandleMainCalled);
+            socket.off('mainFixed', effectHandleMainFixed);
+            socket.off('mainCountered', effectHandleMainCountered);
+            socket.off('playerStickCards', effectHandlePlayerStickCards);
+            socket.off('cardsExchanged', effectHandleCardsExchanged);
+            socket.off('exchangeError', effectHandleExchangeError);
+            socket.off('updatePlayerCards', effectHandleUpdatePlayerCards);
+            socket.off('receiveBottomCards', effectHandleReceiveBottomCards);
+            socket.off('bottomDealError', effectHandleBottomDealError);
+            socket.off('gamePhaseChanged', effectHandleGamePhaseChanged);
+            socket.off('playerTurn', effectHandlePlayerTurn);
+            socket.off('cardPlayed', effectHandleCardPlayed);
+            socket.off('roundEnd', effectHandleRoundEnd);
+            socket.off('playError', effectHandlePlayError);
+            socket.off('roomInfo', effectHandleRoomInfo);
         };
-    }, [sortCards, socket.id]); // Dependencies
+    }, [socket.id, preGameState.mainSuit, preGameState.commonMain]);
 
-    // 叫主倒计时
     useEffect(() => {
-        if (callMainDeadline) {
+        if (preGameState.callMainDeadline) {
             const intervalId = setInterval(() => {
-                const now = Date.now();
-                const timeLeft = Math.max(0, Math.floor((callMainDeadline - now) / 1000));
-                setCallMainTimeLeft(timeLeft);
-                
-                if (timeLeft <= 0) {
-                    clearInterval(intervalId);
-                }
+                const timeLeft = Math.max(0, Math.floor((preGameState.callMainDeadline - Date.now()) / 1000));
+                setPreGameState(prev => ({ ...prev, callMainTimeLeft: timeLeft }));
+                if (timeLeft <= 0) clearInterval(intervalId);
             }, 1000);
-            
             return () => clearInterval(intervalId);
         }
-    }, [callMainDeadline]);
+    }, [preGameState.callMainDeadline]);
 
-    // 加固/反主倒计时
     useEffect(() => {
-        if (stealMainDeadline && !hasCounteredMain) {  // 添加 !hasCounteredMain 条件
+        if (preGameState.stealMainDeadline && !preGameState.hasCounteredMain && !preGameState.isMainFixed) {
             const intervalId = setInterval(() => {
-                const now = Date.now();
-                const timeLeft = Math.max(0, Math.floor((stealMainDeadline - now) / 1000));
-                setStealMainTimeLeft(timeLeft);
-                
-                if (timeLeft <= 0) {
-                    clearInterval(intervalId);
-                }
+                const timeLeft = Math.max(0, Math.floor((preGameState.stealMainDeadline - Date.now()) / 1000));
+                setPreGameState(prev => ({ ...prev, stealMainTimeLeft: timeLeft }));
+                if (timeLeft <= 0) clearInterval(intervalId);
             }, 1000);
-            
             return () => clearInterval(intervalId);
         }
-    }, [stealMainDeadline, hasCounteredMain]);
+    }, [preGameState.stealMainDeadline, preGameState.hasCounteredMain, preGameState.isMainFixed]);
 
-    // 粘主倒计时
     useEffect(() => {
-        if (stickMainDeadline && !hasStickCards) {  // 添加 !hasStickCards 条件
+        if (preGameState.stickMainDeadline && !preGameState.hasStickCards) {
             const intervalId = setInterval(() => {
-                const now = Date.now();
-                const timeLeft = Math.max(0, Math.floor((stickMainDeadline - now) / 1000));
-                setStickMainTimeLeft(timeLeft);
-                
+                const timeLeft = Math.max(0, Math.floor((preGameState.stickMainDeadline - Date.now()) / 1000));
+                setPreGameState(prev => ({ ...prev, stickMainTimeLeft: timeLeft }));
                 if (timeLeft <= 0) {
                     clearInterval(intervalId);
-                    setCanStickCards(false);
-                    setStickMainTimeLeft(null);  // 清除倒计时显示
+                    setPreGameState(prev => ({ ...prev, canStickMain: false, stickMainTimeLeft: null }));
                 }
             }, 1000);
-            
-            return () => {
-                clearInterval(intervalId);
-                if (hasStickCards) {
-                    setStickMainTimeLeft(null);  // 当确认粘主后清除倒计时
-                }
-            };
-        }
-    }, [stickMainDeadline, hasStickCards]);
-
-    // 抠底倒计时
-    useEffect(() => {
-        if (bottomDealDeadline) {
-            const intervalId = setInterval(() => {
-                const now = Date.now();
-                const timeLeft = Math.max(0, Math.floor((bottomDealDeadline - now) / 1000));
-                setBottomDealTimeLeft(timeLeft);
-                
-                if (timeLeft <= 0) {
-                    clearInterval(intervalId);
-                }
-            }, 1000);
-            
             return () => clearInterval(intervalId);
         }
-    }, [bottomDealDeadline]);
+    }, [preGameState.stickMainDeadline, preGameState.hasStickCards]);
 
-    // --- 在 return 语句之前或内部计算按钮状态 ---
-    // (可以在 return 内部需要的地方计算，或者在 return 前面计算一次)
-    const shouldCheckFixOrCounter = mainCalled && !hasCounteredMain && gamePhase === 'pregame'; // 只在 pregame 阶段检查
-    
-    let showFixButtonRender = false;
-    let canFixMainRender = false;
-    let showCounterButtonRender = false;
-    let canCounterMainRender = false;
-
-    if (shouldCheckFixOrCounter) {
-        const isCurrentPlayerMainCaller = mainCaller === socket.id;
-        const canSteal = preGameState.canStealMain;
-
-        if (isCurrentPlayerMainCaller) {
-            showFixButtonRender = true;
-            const jokerToMatch = mainCards?.joker;
-            const jokerCount = playerCards.filter(card =>
-                card.suit === 'JOKER' && card.value === jokerToMatch
-            ).length;
-            canFixMainRender = jokerCount >= 2 && canSteal && !isMainFixed;
-        } else {
-            showCounterButtonRender = true;
-            const bigJokerPair = playerCards.filter(card => card.suit === 'JOKER' && card.value === 'BIG').length === 2;
-            const smallJokerPair = playerCards.filter(card => card.suit === 'JOKER' && card.value === 'SMALL').length === 2;
-            const hasPair = ['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].some(suit => {
-                 const suitPairs = {};
-                 playerCards.forEach(card => {
-                     if (card.suit === suit) {
-                         suitPairs[card.value] = (suitPairs[card.value] || 0) + 1;
-                     }
-                 });
-                 return Object.values(suitPairs).some(count => count >= 2);
-             });
-            canCounterMainRender = (bigJokerPair || smallJokerPair) && hasPair && canSteal;
-        }
-    }
-
-    // 添加新的 useEffect 来处理游戏阶段变化时的清理
     useEffect(() => {
-        console.log(`[Effect] Game phase changed to: ${gamePhase}`);
-        // 当游戏阶段变为 'playing' 时，确保清除所有卡牌选择状态
+        if (preGameState.bottomDealDeadline) {
+            const intervalId = setInterval(() => {
+                const timeLeft = Math.max(0, Math.floor((preGameState.bottomDealDeadline - Date.now()) / 1000));
+                setPreGameState(prev => ({ ...prev, bottomDealTimeLeft: timeLeft }));
+                if (timeLeft <= 0) clearInterval(intervalId);
+            }, 1000);
+            return () => clearInterval(intervalId);
+        }
+    }, [preGameState.bottomDealDeadline]);
+
+    useEffect(() => {
+        const { mainCalled, hasCounteredMain, mainCaller, canStealMain, isMainFixed } = preGameState;
+        const currentSocketId = socket.id;
+        const shouldCheck = mainCalled && !hasCounteredMain && canStealMain && !isMainFixed;
+        let newShowFixButton = false;
+        let newShowCounterButton = false;
+        if (shouldCheck) {
+            if (mainCaller === currentSocketId) newShowFixButton = true;
+            else newShowCounterButton = true;
+        }
+        if (newShowFixButton !== preGameState.showFixButton || newShowCounterButton !== preGameState.showCounterButton) {
+            setPreGameState(prev => ({ ...prev, showFixButton: newShowFixButton, showCounterButton: newShowCounterButton }));
+        }
+    }, [preGameState.mainCalled, preGameState.hasCounteredMain, preGameState.mainCaller, preGameState.canStealMain, preGameState.isMainFixed, socket.id, preGameState.showFixButton, preGameState.showCounterButton]);
+
+    useEffect(() => {
         if (gamePhase === 'playing') {
-            console.log("[Effect] Phase is now playing, clearing selection states.");
-            setSelectedCards([]); // 清除出牌阶段的选择
-            setSelectedBottomCards([]); // 再次确保抠底阶段的选择被清除
+            setSelectedCards([]);
+            setPreGameState(prev => ({ ...prev, selectedBottomCards: [] }));
         }
-        // 如果未来有其他阶段需要清理，也可以在这里添加 else if
-    }, [gamePhase]); // 这个 effect 只在 gamePhase 变化时运行
+    }, [gamePhase]);
 
-    // **添加加载状态处理**
+    const isPlayButtonDisabled = useMemo(() => {
+        if (!isMyTurn || selectedCards.length === 0) return true;
+        if (isFirstPlayerInRound) {
+            return !isValidCardPattern(selectedCards, preGameState.mainSuit, preGameState.commonMain);
+        } else {
+            return !isValidFollow(selectedCards, playerCards, leadingPlay, preGameState.mainSuit, preGameState.commonMain);
+        }
+    }, [isMyTurn, selectedCards, isFirstPlayerInRound, leadingPlay, playerCards, preGameState.mainSuit, preGameState.commonMain]);
+
     if (isLoadingPlayers) {
-        return (
+    return (
             <Center h="100vh" bg="green.700">
                 <Spinner size="xl" color="white" />
                 <Text ml={4} color="white" fontSize="lg">正在加载玩家信息...</Text>
@@ -1543,515 +579,139 @@ function GameLayout() {
         );
     }
 
-    // 渲染界面
     return (
-        <Box position="relative" h="100vh" bg="green.700" overflow="hidden"> {/* 使用深绿色背景 */}
-            {/* GameInfo 组件保持不变 */}
+        <Box position="relative" h="100vh" bg="green.700" overflow="hidden">
             <GameInfo 
-                mainSuit={mainSuit}
-                mainCaller={mainCaller}
-                mainCards={mainCards}
+                mainSuit={preGameState.mainSuit}
+                mainCaller={preGameState.mainCaller}
+                mainCards={preGameState.mainCards}
                 gamePhase={gamePhase}
                 preGameState={preGameState}
-                isMainFixed={isMainFixed}
-                hasCounteredMain={hasCounteredMain}
+                isMainFixed={preGameState.isMainFixed}
+                hasCounteredMain={preGameState.hasCounteredMain}
+            />
+            
+            <PlayerInfoArea 
+                playersInfo={playersInfo}
+                playedCardsInfo={playedCardsInfo}
+                isLoadingPlayers={isLoadingPlayers}
+                currentPlayer={currentPlayer}
+                mainCaller={preGameState.mainCaller}
+                currentUserId={socket.id}
             />
 
-            {/* --- 玩家信息框和出牌区域 --- */}
-            {console.log('[渲染检查] 准备渲染玩家信息区域. playersInfo:', JSON.stringify(playersInfo))}
-
-            {/* 添加条件渲染：仅当 playersInfo 有数据时才渲染 */}
-            {playersInfo.map((player) => {
-                if (!player || !player.position) {
-                     console.warn("渲染跳过：玩家信息不完整", player); // 添加警告
-                     return null; 
-                }
-
-                let positionProps = {};
-                let playedCardsPositionProps = {};
-                let playedCardsAlignment = {}; // 用于HStack/VStack
-
-                switch (player.position) {
-                    case 'top': // 对家 (上方)
-                        positionProps = { top: "5%", left: "50%", transform: "translateX(-50%)" };
-                        playedCardsPositionProps = { top: "calc(5% + 40px)", left: "50%", transform: "translateX(-50%)", mt: 1 }; // 信息框下方
-                        playedCardsAlignment = { justify: "center" };
-                        break;
-                    case 'left': // 左边玩家
-                        positionProps = { top: "50%", left: "3%", transform: "translateY(-50%)" };
-                        playedCardsPositionProps = { top: "50%", left: "calc(3% + 80px)", transform: "translateY(-50%)", ml: 1 }; // 信息框右侧
-                        playedCardsAlignment = { align: "center" };
-                        break;
-                    case 'right': // 右边玩家
-                        positionProps = { top: "50%", right: "3%", transform: "translateY(-50%)" };
-                        playedCardsPositionProps = { top: "50%", right: "calc(3% + 80px)", transform: "translateY(-50%)", mr: 1 }; // 信息框左侧
-                        playedCardsAlignment = { align: "center" };
-                        break;
-                    case 'bottom': // 自己 (下方) - 信息框可选
-                        // positionProps = { bottom: "20%", left: "50%", transform: "translateX(-50%)" }; // 信息框位置 (如果需要)
-                        playedCardsPositionProps = { bottom: "25%", left: "50%", transform: "translateX(-50%)", mb: 1 }; // 手牌上方
-                        playedCardsAlignment = { justify: "center" };
-                        break;
-                    default:
-                        console.warn("渲染跳过：无效的玩家位置", player); // 添加警告
-                        return null;
-                }
-
-                // 获取当前玩家出的牌
-                const cardsPlayed = playedCardsInfo[player.id] || [];
-
-                return (
-                    <React.Fragment key={player.id}>
-                        {/* 玩家信息框 (除了自己) */}
-                        {player.position !== 'bottom' && (
-                             <Box 
-                                position="absolute" 
-                                {...positionProps}
-                                bg="rgba(255, 255, 255, 0.7)" // 半透明白色背景
-                                p={2} 
-                                borderRadius="md" 
-                                minW="70px" // 最小宽度
-                                zIndex={5} // 确保在牌上方
-                             >
-                                <Text textAlign="center" fontSize="sm" fontWeight="bold">{player.name || player.id.slice(0, 4)}</Text>
-                                {/* 可以在这里添加其他信息，比如剩余牌数 */}
-                            </Box>
-                        )}
-
-                        {/* 出牌区域 */}
-                        {cardsPlayed.length > 0 && (
-                            <HStack 
-                                position="absolute" 
-                                {...playedCardsPositionProps}
-                                {...playedCardsAlignment}
-                                zIndex={10} // 确保在信息框上方
-                                spacing="-25px" // 卡牌重叠效果，负值越大重叠越多
-                            >
-                                {cardsPlayed.map((card, index) => (
-                                    <Card 
-                                        key={`${card.suit}-${card.value}-${index}`} 
-                                        suit={card.suit} 
-                                        value={card.value} 
-                                        className="played-card small" // 使用 small 类来缩小尺寸
-                                    />
-                                ))}
-                            </HStack>
-                        )}
-                    </React.Fragment>
-                );
-            })}
-            {/* --- 玩家信息框和出牌区域结束 --- */}
-
-
-            {/* 发牌进度显示 (保持不变) */}
             {gamePhase === 'pregame' && preGameState.isDealing && (
                 <Center position="absolute" top="50%" left="50%" transform="translate(-50%, -50%)">
                     <Box w="300px">
-                        <Text mb={2} textAlign="center">发牌中... {Math.floor(dealingProgress)}%</Text>
-                        <Progress value={dealingProgress} size="lg" colorScheme="blue" />
+                        <Text mb={2} textAlign="center">发牌中... {Math.floor(preGameState.dealingProgress)}%</Text>
+                        <Progress value={preGameState.dealingProgress} size="lg" colorScheme="blue" />
                     </Box>
                 </Center>
             )}
 
-            {/* 操作区域 */}
-            <Center position="absolute" top="60%" left="50%" transform="translate(-50%, -50%)">
-                {/* 未叫主状态下的叫主界面 */}
-                {!mainCalled && preGameState.canCallMain && (
+            <Center position="absolute" top="60%" left="50%" transform="translate(-50%, -50%)" zIndex={15}>
+                {!preGameState.mainCalled && preGameState.canCallMain && (
                     <HStack spacing={4}>
-                        {/* 大小王选择 */}
                         <HStack spacing={2}>
-                            <Button
-                                colorScheme={selectedJoker === 'BIG' ? 'green' : 'gray'}
-                                onClick={() => handleJokerSelect('BIG')}
-                                isDisabled={!hasJoker('BIG')}
-                            >
-                                <Text color="red">大王</Text>
-                            </Button>
-                            <Button
-                                colorScheme={selectedJoker === 'SMALL' ? 'green' : 'gray'}
-                                onClick={() => handleJokerSelect('SMALL')}
-                                isDisabled={!hasJoker('SMALL')}
-                            >
-                                小王
-                            </Button>
+                            <Button colorScheme={selectedJoker === 'BIG' ? 'green' : 'gray'} onClick={() => handleJokerSelect('BIG')} isDisabled={!hasJoker('BIG')}><Text color="red">大王</Text></Button>
+                            <Button colorScheme={selectedJoker === 'SMALL' ? 'green' : 'gray'} onClick={() => handleJokerSelect('SMALL')} isDisabled={!hasJoker('SMALL')}>小王</Button>
                         </HStack>
-
-                        {/* 花色对子选择 */}
                         <HStack spacing={0}>
                             {['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].map((suit) => (
                                 <Menu key={suit}>
-                                    <MenuButton
-                                        as={Button}
-                                        colorScheme={selectedPair?.suit === suit ? 'green' : 'gray'}
-                                        isDisabled={getPairs(suit).length === 0}
-                                    >
-                                        {suit === 'HEARTS' ? '♥️' : 
-                                         suit === 'SPADES' ? '♠️' : 
-                                         suit === 'DIAMONDS' ? '♦️' : '♣️'}
+                                    <MenuButton as={Button} colorScheme={selectedPair?.suit === suit ? 'green' : 'gray'} isDisabled={getPairs(suit).length === 0}>
+                                        {suit === 'HEARTS' ? '♥️' : suit === 'SPADES' ? '♠️' : suit === 'DIAMONDS' ? '♦️' : '♣️'}
                                     </MenuButton>
                                     <MenuList>
-                                        {getPairs(suit).map(value => (
-                                            <MenuItem
-                                                key={value}
-                                                onClick={() => handlePairSelect(suit, value)}
-                                            >
-                                                {value}
-                                            </MenuItem>
-                                        ))}
+                                        {getPairs(suit).map(value => (<MenuItem key={value} onClick={() => handlePairSelect(suit, value)}>{value}</MenuItem>))}
                                     </MenuList>
                                 </Menu>
                             ))}
                         </HStack>
-
-                        {/* 叫主按钮 */}
                         <HStack>
-                            <Button
-                                colorScheme="blue"
-                                onClick={handleCallMain}
-                                isDisabled={!canCallMain || !selectedJoker || !selectedPair}
-                            >
-                                叫主
-                            </Button>
-                            {callMainTimeLeft !== null && (
-                                <Text ml={2} color={callMainTimeLeft <= 3 ? "red.500" : "gray.500"}>
-                                    {callMainTimeLeft}秒
-                                </Text>
-                            )}
+                            <Button colorScheme="blue" onClick={handleCallMain} isDisabled={!preGameState.canCallMain || !selectedJoker || !selectedPair}>叫主</Button>
+                            {preGameState.callMainTimeLeft !== null && (<Text ml={2} color={preGameState.callMainTimeLeft <= 3 ? "red.500" : "gray.500"}>{preGameState.callMainTimeLeft}秒</Text>)}
                         </HStack>
                     </HStack>
                 )}
-
-                {/* 已叫主状态下 - 其他玩家的反主界面 */}
-                {showCounterButtonRender && ( // 使用计算出的 Render 变量
+                {preGameState.showCounterButton && (
                     <HStack spacing={4}>
-                        {/* 大小王选择和花色对子选择 */}
-                        {preGameState.canStealMain && !hasCounteredMain && ( // 保留 canStealMain 条件
+                        {preGameState.canStealMain && !preGameState.hasCounteredMain && (
                             <>
-                                {/* 大小王选择 */}
                                 <HStack spacing={2}>
-                                    <Button
-                                        colorScheme={counterJoker === 'BIG' ? 'green' : 'gray'}
-                                        onClick={() => setCounterJoker('BIG')}
-                                        isDisabled={!hasJokerPair('BIG')}
-                                    >
-                                        <Text color="red">大王(对)</Text>
-                                    </Button>
-                                    <Button
-                                        colorScheme={counterJoker === 'SMALL' ? 'green' : 'gray'}
-                                        onClick={() => setCounterJoker('SMALL')}
-                                        isDisabled={!hasJokerPair('SMALL')}
-                                    >
-                                        小王(对)
-                                    </Button>
+                                    <Button colorScheme={preGameState.counterJoker === 'BIG' ? 'green' : 'gray'} onClick={() => setPreGameState(prev => ({ ...prev, counterJoker: 'BIG' }))} isDisabled={!hasJokerPair('BIG')}><Text color="red">大王(对)</Text></Button>
+                                    <Button colorScheme={preGameState.counterJoker === 'SMALL' ? 'green' : 'gray'} onClick={() => setPreGameState(prev => ({ ...prev, counterJoker: 'SMALL' }))} isDisabled={!hasJokerPair('SMALL')}>小王(对)</Button>
                                 </HStack>
-
-                                {/* 花色对子选择 */}
                                 <HStack spacing={0}>
                                     {['HEARTS', 'SPADES', 'DIAMONDS', 'CLUBS'].map((suit) => (
                                         <Menu key={suit}>
-                                            <MenuButton
-                                                as={Button}
-                                                colorScheme={counterPair?.suit === suit ? 'green' : 'gray'}
-                                                isDisabled={getPairs(suit).length === 0}
-                                            >
-                                                {suit === 'HEARTS' ? '♥' : 
-                                                 suit === 'SPADES' ? '♠' : 
-                                                 suit === 'DIAMONDS' ? '♦' : '♣'}
+                                            <MenuButton as={Button} colorScheme={preGameState.counterPair?.suit === suit ? 'green' : 'gray'} isDisabled={getPairs(suit).length === 0}>
+                                                {suit === 'HEARTS' ? '♥' : suit === 'SPADES' ? '♠' : suit === 'DIAMONDS' ? '♦' : '♣'}
                                             </MenuButton>
                                             <MenuList>
-                                                {getPairs(suit).map(value => (
-                                                    <MenuItem
-                                                        key={value}
-                                                        onClick={() => setCounterPair({ suit, value })}
-                                                    >
-                                                        {value}
-                                                    </MenuItem>
-                                                ))}
+                                                {getPairs(suit).map(value => (<MenuItem key={value} onClick={() => setPreGameState(prev => ({ ...prev, counterPair: { suit, value } }))}>{value}</MenuItem>))}
                                             </MenuList>
                                         </Menu>
                                     ))}
                                 </HStack>
                             </>
                         )}
-
-                        {/* 反主按钮 */}
                         <HStack>
-                            <Button
-                                colorScheme={hasCounteredMain ? "gray" : "red"}
-                                onClick={handleCounterMain}
-                                // 使用计算出的 Render 变量
-                                isDisabled={hasCounteredMain || !preGameState.canStealMain || !canCounterMainRender || !counterJoker || !counterPair} 
-                            >
-                                {hasCounteredMain ? "已反主" : "反主"}
+                            <Button colorScheme={preGameState.hasCounteredMain ? "gray" : "red"} onClick={handleCounterMain} isDisabled={preGameState.hasCounteredMain || !preGameState.canStealMain || !preGameState.canCounterMain || !preGameState.counterJoker || !preGameState.counterPair}>
+                                {preGameState.hasCounteredMain ? "已反主" : "反主"}
                             </Button>
-                            {stealMainTimeLeft !== null && !hasCounteredMain && (
-                                <Text ml={2} color={stealMainTimeLeft <= 3 ? "red.500" : "gray.500"}>
-                                    {stealMainTimeLeft}秒
-                                </Text>
-                            )}
+                            {preGameState.stealMainTimeLeft !== null && !preGameState.hasCounteredMain && (<Text ml={2} color={preGameState.stealMainTimeLeft <= 3 ? "red.500" : "gray.500"}>{preGameState.stealMainTimeLeft}秒</Text>)}
                         </HStack>
                     </HStack>
                 )}
-
-                {/* 已反主后的状态显示 */}
-                {hasCounteredMain && !isStickPhase && (
-                    <Button
-                        colorScheme="gray"
-                        isDisabled={true}
-                    >
-                        已反主
-                    </Button>
-                )}
-
-                {/* 已叫主状态下 - 叫主玩家的加固按钮 */}
-                {showFixButtonRender && ( // 使用计算出的 Render 变量
+                {preGameState.hasCounteredMain && !preGameState.isStickPhase && (<Button colorScheme="gray" isDisabled={true}>已反主</Button>)}
+                {preGameState.showFixButton && (
                     <HStack>
-                        <Button
-                            colorScheme={isMainFixed ? "gray" : "green"}
-                            onClick={handleFixMain}
-                            // 使用计算出的 Render 变量
-                            isDisabled={isMainFixed || !preGameState.canStealMain || !canFixMainRender} 
-                        >
-                            {isMainFixed ? "已加固" : "加固"}
+                        <Button colorScheme={preGameState.isMainFixed ? "gray" : "green"} onClick={handleFixMain} isDisabled={preGameState.isMainFixed || !preGameState.canStealMain || !preGameState.canFixMain}>
+                            {preGameState.isMainFixed ? "已加固" : "加固"}
                         </Button>
-                        {stealMainTimeLeft !== null && !isMainFixed && (
-                            <Text ml={2} color={stealMainTimeLeft <= 3 ? "red.500" : "gray.500"}>
-                                {stealMainTimeLeft}秒
-                            </Text>
-                        )}
+                        {preGameState.stealMainTimeLeft !== null && !preGameState.isMainFixed && (<Text ml={2} color={preGameState.stealMainTimeLeft <= 3 ? "red.500" : "gray.500"}>{preGameState.stealMainTimeLeft}秒</Text>)}
                     </HStack>
                 )}
             </Center>
             
+            <PlayerHandDisplay
+                playerCards={sortCards(playerCards, preGameState.mainSuit, preGameState.commonMain)}
+                selectedCards={selectedCards}
+                onCardSelect={handleCardSelect} 
+                onCardInteraction={handleCardInteraction} 
+                gamePhase={gamePhase}
+                preGameState={preGameState}
+                cardSelectionValidator={validators.gaming}
+                socketId={socket.id}
+            />
 
-            {/* 玩家手牌区域 */}
-            <Center 
-                position="absolute" 
-                bottom="5%" 
-                left="50%" 
-                transform="translateX(-50%)"
-                maxW="90vw"
-                overflow="visible"
-            >
-                <div className="player-hand">
-                    {playerCards.map((card, index) => {
-                        const isSelected = 
-                            (gamePhase === 'bottomDeal' && isBottomDealer)
-                                ? selectedBottomCards.some(c => {
-                                    const selectedIndex = playerCards.findIndex(pc => pc === c);
-                                    const currentIndex = playerCards.findIndex(pc => pc === card);
-                                    return selectedIndex === currentIndex;
-                                  })
-                                : selectedCards.some(c => {
-                                    const selectedIndex = playerCards.findIndex(pc => pc === c);
-                                    const currentIndex = playerCards.findIndex(pc => pc === card);
-                                    return selectedIndex === currentIndex;
-                                  });
-                        
-                        const canSelect = 
-                            (gamePhase === 'bottomDeal' && isBottomDealer)
-                                ? selectedBottomCards.length < 4
-                                : cardSelectionValidator?.(card, selectedCards);
-                        
-                        // 修改底牌检测逻辑
-                        const isFromBottom = card.isFromBottom && 
-                            cardsFromBottom.includes(`${card.suit}-${card.value}`);
-                        const hasInteracted = interactedBottomCards.has(`${card.suit}-${card.value}-${index}`); // 添加索引确保唯一性
-                        
-                        return (
-                            <div 
-                                key={`${card.suit}-${card.value}-${index}`} 
-                                className={`card-container ${isSelected ? 'selected' : ''} 
-                                          ${!canSelect ? 'disabled' : ''}`}
-                                onClick={() => {
-                                    handleCardSelect(card);
-                                    handleCardInteraction(card);
-                                }}
-                                onMouseEnter={() => handleCardInteraction(card)}
-                            >
-                                <Card 
-                                    suit={card.suit}
-                                    value={card.value}
-                                    className={`player-card ${isFromBottom && !hasInteracted ? 'from-bottom' : ''}`}
-                                />
-                            </div>
-                        );
-                    })}
-                </div>
-            </Center>
-
-            {/* 粘牌按钮 */}
-            {isStickPhase && 
-             preGameState.canStickMain && 
-             mainCaller !== socket.id && 
-             !hasStickCards && 
-             gamePhase === 'stickPhase' && (  // 添加这个条件
-                <HStack position="absolute" top="60%" left="50%" transform="translate(-50%, -50%)">
-                    <Button
-                        colorScheme="blue"
-                        onClick={handleStickCards}
-                        isDisabled={!canStickCards}
-                    >
-                        粘主
-                    </Button>
-                    {stickMainTimeLeft !== null && !hasStickCards && (
-                        <Text ml={2} color={stickMainTimeLeft <= 3 ? "red.500" : "gray.500"}>
-                            {stickMainTimeLeft}秒
-                        </Text>
-                    )}
+            {preGameState.isStickPhase && preGameState.canStickMain && preGameState.mainCaller !== socket.id && !preGameState.hasStickCards && gamePhase === 'stickPhase' && (
+                <HStack position="absolute" top="60%" left="50%" transform="translate(-50%, -50%)" zIndex={15}>
+                    <Button colorScheme="blue" onClick={handleStickCards} isDisabled={!preGameState.canStickMain}>粘主</Button>
+                    {preGameState.stickMainTimeLeft !== null && !preGameState.hasStickCards && (<Text ml={2} color={preGameState.stickMainTimeLeft <= 3 ? "red.500" : "gray.500"}>{preGameState.stickMainTimeLeft}秒</Text>)}
                 </HStack>
             )}
 
-            {/* 显示叫主玩家的牌和选择要交换的牌 */}
-            {isStickPhase && hasStickCards && (
-                <Box 
-                    position="absolute" 
-                    top="50%" 
-                    left="50%" 
-                    transform="translate(-50%, -50%)"
-                    bg="white"
-                    p={4}
-                    borderRadius="md"
-                    boxShadow="lg"
-                    zIndex={10}
-                >
-                    {/* 显示叫主玩家的牌 */}
-                    {mainCallerCards && (
-                        <Box mb={4}>
-                            <Text fontWeight="bold" mb={2}>叫主玩家的牌：</Text>
-                            <HStack spacing={2}>
-                                {mainCallerCards.map((card, index) => (
-                                    <Card 
-                                        key={index}
-                                        suit={card.suit}
-                                        value={card.value}
-                                    />
-                                ))}
-                            </HStack>
-                        </Box>
-                    )}
-
-                    {/* 选择要交换的牌 */}
-                    <Box>
-                        <Text fontWeight="bold" mb={2}>选择要交换的牌：</Text>
-                        <VStack align="start" spacing={2} mb={4}>
-                            <HStack>
-                                <Text>1. 先选择一张<strong>常主</strong>或<strong>固定常主</strong>(2/3/5)</Text>
-                                {selectedCards.length > 0 && (
-                                    <Text color="green.500" ml={2}>✓</Text>
-                                )}
-                            </HStack>
-                            <HStack>
-                                <Text>2. 再选择两张<strong>主花色</strong>的牌</Text>
-                                {selectedCards.length === 3 && (
-                                    <Text color="green.500" ml={2}>✓</Text>
-                                )}
-                            </HStack>
-                        </VStack>
-                        <Button
-                            colorScheme="green"
-                            onClick={handleConfirmStickCards}
-                            isDisabled={selectedCards.length !== 3}
-                            width="100%"
-                        >
-                            确认交换
-                        </Button>
-                    </Box>
+            {preGameState.isStickPhase && preGameState.mainCaller === socket.id && !preGameState.hasStickCards && (
+                <Box position="absolute" top="50%" left="50%" transform="translate(-50%, -50%)" bg="white" p={4} borderRadius="md" boxShadow="lg" zIndex={20}>
+                    <Button colorScheme="green" onClick={handleConfirmStickCards} isDisabled={!preGameState.selectedCardsForSticking.commonMain || preGameState.selectedCardsForSticking.suitCards.length !== 2} width="100%">确认交换</Button>
                 </Box>
             )}
 
-            {/* 抠底界面 */}
-            {gamePhase === 'bottomDeal' && isBottomDealer && (
-                <Box 
-                    position="absolute" 
-                    top="50%" 
-                    left="50%" 
-                    transform="translate(-50%, -50%)"
-                    bg="white"
-                    p={4}
-                    borderRadius="md"
-                    boxShadow="lg"
-                    zIndex={10}
-                >
-                    {/* 显示原来的底牌 */}
-                    {bottomCards && bottomCards.length > 0 && (
-                        <Box mb={4}>
-                            <Text fontWeight="bold" mb={2}>原底牌：</Text>
-                            <HStack spacing={2}>
-                                {(bottomCards || []).map((card, index) => (
-                                    <Card 
-                                        key={index}
-                                        suit={card.suit}
-                                        value={card.value}
-                                    />
-                                ))}
-                            </HStack>
-                        </Box>
-                    )}
-
-                    {/* 选择要放入底牌的牌 */}
-                    <Box>
-                        <Text fontWeight="bold" mb={2}>请选择4张牌放入底牌：</Text>
-                        <VStack align="start" spacing={2} mb={4}>
-                            <HStack>
-                                <Text>已选择 {selectedBottomCards.length}/4 张牌</Text>
-                                {selectedBottomCards.length === 4 && (
-                                    <Text color="green.500" ml={2}>✓</Text>
-                                )}
-                            </HStack>
-                        </VStack>
-                        <Button
-                            colorScheme="green"
-                            onClick={handleConfirmBottomDeal}
-                            isDisabled={selectedBottomCards.length !== 4}
-                            width="100%"
-                        >
-                            确认放底
-                        </Button>
-                        {bottomDealTimeLeft !== null && (
-                            <Text mt={2} textAlign="center" color={bottomDealTimeLeft <= 5 ? "red.500" : "gray.500"}>
-                                {bottomDealTimeLeft}秒
-                            </Text>
-                        )}
-                    </Box>
-                </Box>
-            )}
-
-            {/* 在玩家手牌区域下方添加 playing 阶段的 UI 组件 */}
-            {gamePhase === 'playing' && (
-                <VStack position="absolute" top="60%" left="50%" transform="translate(-50%, -50%)" spacing={4}>
-                    {isMyTurn ? (
-                        <Text fontSize="xl" fontWeight="bold" color="green.500">
-                            轮到你出牌了!
-                        </Text>
-                    ) : (
-                        <Text fontSize="xl" fontWeight="bold">
-                            等待其他玩家出牌...
-                        </Text>
-                    )}
-                    <Button
-                        colorScheme="blue"
-                        onClick={handlePlayCards}
-                        isDisabled={selectedCards.length === 0 || !isMyTurn}
-                    >
-                        出牌
-                    </Button>
-                </VStack>
-            )}
-
-            {/* 添加新的日志打印 */}
-            {gamePhase === 'playing' && (
-                <Text mt={4} textAlign="center" color="gray.500">
-                    游戏状态: {JSON.stringify({
-                        gamePhase,
-                        isMyTurn,
-                        isFirstPlayerInRound,
-                        cardSelectionValidator: !!cardSelectionValidator,
-                        socket_id: socket.id,
-                        currentPlayer
-                    })}
-                </Text>
-            )}
+            <ActionPanel 
+                gamePhase={gamePhase}
+                isMyTurn={isMyTurn}
+                onPlayCards={handlePlayCards}
+                isPlayButtonDisabled={isPlayButtonDisabled}
+                preGameState={preGameState}
+                onConfirmBottomDeal={handleConfirmBottomDeal}
+                leadingPlay={leadingPlay}
+                isFirstPlayerInRound={isFirstPlayerInRound}
+                playersInfo={playersInfo}
+                currentPlayer={currentPlayer}
+                socketId={socket.id}
+            />
         </Box>
     );
 }

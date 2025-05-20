@@ -46,12 +46,8 @@ module.exports = function(socket, io, games, rooms, utils) {
             { suit: 'HEARTS', value: '5' }
         ];
         const cardsToDealToPlayer = 26 - presetPlayerHand.length; // 计算需要补充多少张牌
-        console.log(`预设手牌 ${presetPlayerHand.length} 张, 需要补充 ${cardsToDealToPlayer} 张`);
+        // console.log(`预设手牌 ${presetPlayerHand.length} 张, 需要补充 ${cardsToDealToPlayer} 张`);
         // --- 预设手牌结束 ---
-
-        // 创建牌堆
-        const fullDeck = createDeck();
-        // console.log('原始牌堆数量:', fullDeck.length);
         
         // 预先准备对家（机器人）的牌
         const botCards = [
@@ -59,6 +55,10 @@ module.exports = function(socket, io, games, rooms, utils) {
             { suit: 'HEARTS', value: 'A' },    // 红桃A
             { suit: 'HEARTS', value: 'A' }     // 红桃A
         ];
+
+        // 创建牌堆
+        const fullDeck = createDeck();
+        // console.log('原始牌堆数量:', fullDeck.length);
         
         // 从牌堆中移除 预设给玩家的牌 和 预设给机器人的牌
         const cardsToRemove = [...presetPlayerHand, ...botCards];
@@ -83,8 +83,8 @@ module.exports = function(socket, io, games, rooms, utils) {
         const shuffledDeck = shuffleDeck(deck);
         
         // --- 创建游戏状态 ---
-        const tempMainSuit = 'HEARTS'; // 假设的主花色，用于初始化
-        const tempCommonMain = '2';   // 假设的常主，用于初始化
+        // const tempMainSuit = 'HEARTS'; // 假设的主花色，用于初始化
+        // const tempCommonMain = '2';   // 假设的常主，用于初始化
 
         const gameState = {
             deck: shuffledDeck,
@@ -288,6 +288,9 @@ module.exports = function(socket, io, games, rooms, utils) {
         
         socket.join(roomId);
         socket.emit('joinRoomSuccess', roomId);
+        
+        console.log(`[服务器] 准备发送 roomInfo 给房间: ${roomId}. 房间成员数: ${io.sockets.adapter.rooms.get(roomId)?.size}`);
+        console.log(`[服务器] 发送的 players 数据:`, room.players.map(p=>({id:p.id, name:p.name}))); // 或 gameState.players
         io.to(roomId).emit('roomInfo', room);
         
         socket.emit('testGameCreated', { 

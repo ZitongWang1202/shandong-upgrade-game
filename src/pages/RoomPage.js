@@ -58,10 +58,13 @@ const RoomPage = () => {
     
     // 监听加入房间成功
     socket.on('joinRoomSuccess', (joinedRoomId) => {
-      console.log('Successfully joined room:', joinedRoomId);
+      console.log('[RoomPage] Successfully joined room:', joinedRoomId);
       localStorage.setItem('roomId', joinedRoomId);
-      // 获取最新的房间信息
-      getRoomInfo();
+      // getRoomInfo(); // 这个调用仍然可以保留，以获取房间内其他玩家的准备状态等信息
+
+      // 不再从此发送 clientReadyForRoomInfo 信号
+      // console.log(`[RoomPage] Emitting clientReadyForRoomInfo for room ${joinedRoomId}`);
+      // socket.emit('clientReadyForRoomInfo', { roomId: joinedRoomId }); 
     });
     
     // 监听错误

@@ -1,7 +1,3 @@
-开始设计卡牌SVG组件
-实现基本的游戏界面布局
-设置路由和页面结构
-实现用户认证系统
 
 cd shandong-upgrade-game
 cd shandong-upgrade-game/server && npm run dev
@@ -51,7 +47,19 @@ cd shandong-upgrade-game && npm start
 
 出牌阶段
 
-
+1. 实现 isValidFollow: GameLayout.js 中的 isValidFollow 函数目前只是一个检查牌数的占位符。这是剩下的最关键的部分。你需要仔细地将 rule5.js 和 rule7.js 中的规则转换为该函数内的 JavaScript 逻辑。这包括：
+~识别领出的花色和牌型。
+~检查玩家手牌中是否有领出的花色。
+~强制执行“必须跟同花色”的规则。
+~强制执行“必须跟同牌型”的规则（例如，如果可能，对子必须跟对子）。
+~处理垫牌。
+~处理用主牌毙牌（杀牌），并进行正确的牌型匹配。
+~处理用更大的主牌超吃，通过比较大小。
+~你很可能需要辅助函数，如 getPatternDetails(cards, mainSuit, commonMain)（获取牌型细节）和健壮的牌等级比较函数 (getCardRank)。
+2. 实现 determineRoundWinner: 服务器端的占位符需要正确的逻辑，以根据打出的牌、是否毙牌和牌的大小来决定谁赢得这一轮。赢家获得下一轮的领出权。
+3. 服务器端验证: 在服务器的 playCards 处理器中添加更健壮的验证，以防止作弊或错误，应镜像客户端的 isValidFollow 逻辑。
+4. 优化 cardSelectionValidator (可选): 通过在 GameLayout.js 的 gaming 验证器中添加检查，改善跟牌玩家的实时选牌体验。
+5. 测试: 全面测试各种场景：跟同花色、没有同花色时垫牌/毙牌、主牌吃副牌、主牌吃主牌（超吃）、跟不同的牌型（对子、连对）。
 
 
 
@@ -62,3 +70,9 @@ cd shandong-upgrade-game && npm start
 游戏流程
 
 
+
+players
+room
+gamestate
+
+io.to(roomId).emit('gameStart');

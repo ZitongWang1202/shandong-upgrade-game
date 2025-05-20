@@ -28,6 +28,7 @@ const createFixTest = require('./tests/createFixTestGame');
 const createPlayingTest = require('./tests/createPlayingTestGame');
 const createStickTest = require('./tests/createStickTestGame');
 const createTestGame = require('./tests/createTestGame');
+const createFollowTestGame = require('./tests/createFollowTestGame');
 
 app.use(cors());
 
@@ -163,6 +164,7 @@ io.on('connection', (socket) => {
     createStickTest(socket, io, games, rooms, { createDeck, shuffleDeck, handleBotPlay, endRound });
     createBottomTest(socket, io, games, rooms, { createDeck, shuffleDeck, handleBotPlay, endRound });
     createTestGame(socket, io, games, rooms, { createDeck, shuffleDeck, handleBotPlay, endRound });
+    createFollowTestGame(socket, io, games, rooms, { createDeck, shuffleDeck, handleBotPlay, endRound });
 
     // 获取房间列表
     socket.on('getRooms', () => {
@@ -755,139 +757,211 @@ io.on('connection', (socket) => {
         socket.emit('currentRoom', currentRoomId);
     });
 
-    // 添加处理抠底的事件
+    // 辅助函数：获取领出牌信息
+    function getLeadingPlay(roundCards) {
+        if (!roundCards || roundCards.length === 0) {
+            return null;
+        }
+        // TODO: 如果客户端需要，稍后分析 roundCards[0].cards 的牌型
+        return roundCards[0]; // 返回第一个出牌的对象 { player, cards }
+    }
+
+    // 修改 confirmBottomDeal 以正确初始化出牌阶段
     socket.on('confirmBottomDeal', ({ roomId, putCards }) => {
         const gameState = games.get(roomId);
-        if (!gameState || gameState.bottomDealer !== socket.id) {
-            console.log('无效的抠底请求');
+        const room = rooms.get(roomId);
+        // ... (验证 gameState, gameState.bottomDealer 是否等于 socket.id, putCards.length, room) ...
+        if (!gameState || gameState.bottomDealer !== socket.id || putCards.length !== 4 || !room) {
+            console.log('无效的抠底请求或房间未找到');
+            // 处理错误
+            socket.emit('bottomDealError', { message: '无效的操作或房间信息' });
             return;
         }
-        
-        // 验证放入底牌的数量
-        if (putCards.length !== 4) {
-            console.log('底牌数量不符合要求:', putCards.length);
-            socket.emit('bottomDealError', { message: '必须放入4张牌' });
-            return;
-        }
-        
+
         console.log('玩家放入的底牌:', putCards);
-        
+
+        // 找到执行抠底操作的玩家对象
+        const playerWhoDealtBottom = gameState.players.find(p => p.id === socket.id); // <-- 使用这个变量名
+        if (!playerWhoDealtBottom) { // <-- 检查是否找到了玩家
+            console.log('无法在游戏状态中找到抠底玩家对象');
+            socket.emit('bottomDealError', { message: '找不到玩家信息' });
+            return;
+        }
+
         // 更新底牌
         gameState.bottomCards = putCards;
-        
-        // 从玩家手牌中移除这些牌
-        const bottomDealer = gameState.players.find(p => p.id === socket.id);
-        if (!bottomDealer) {
-            console.log('找不到抠底玩家');
-            return;
-        }
-        
-        bottomDealer.cards = bottomDealer.cards.filter(card => 
-            !putCards.some(pc => pc.suit === card.suit && pc.value === card.value)
+
+        // 从玩家手牌中移除这些牌 (使用 playerWhoDealtBottom)
+        playerWhoDealtBottom.cards = playerWhoDealtBottom.cards.filter(card =>
+            !putCards.some(pc => pc.suit === card.suit && pc.value === card.value && pc.bottomId === card.bottomId) // Use bottomId if available for uniqueness
+            || !putCards.some(pc => pc.suit === card.suit && pc.value === card.value && !card.bottomId && !pc.bottomId) // Fallback for cards without bottomId
         );
-        
-        console.log('抠底后玩家剩余的牌数量:', bottomDealer.cards.length);
-        
-        // 进入游戏阶段
+
+        console.log('抠底后玩家剩余的牌数量:', playerWhoDealtBottom.cards.length); // <-- 使用 playerWhoDealtBottom
+
+        console.log('在改变阶段到 playing 前发送 roomInfo');
+        io.to(roomId).emit('roomInfo', room);
+
+        // 进入出牌阶段
         gameState.phase = 'playing';
-        io.to(roomId).emit('updateGameState', {
-            phase: 'playing'
+        const bottomDealerIndex = gameState.players.findIndex(p => p.id === gameState.bottomDealer); // 这里 gameState.bottomDealer 是 ID
+        gameState.currentPlayer = gameState.players[(bottomDealerIndex + 1) % 4].id; // 抠底玩家的下家开始
+        gameState.firstPlayerInRound = gameState.currentPlayer; // 标记第一个出牌的玩家
+        gameState.roundCards = []; // 初始化/清空第一轮的牌
+
+        console.log('改变游戏阶段到 playing. 当前玩家:', gameState.currentPlayer);
+
+        // 发送游戏阶段更新
+        io.to(roomId).emit('gamePhaseChanged', {
+            phase: 'playing',
+            currentPlayer: gameState.currentPlayer
         });
-        
-        // 更新抠底玩家的手牌
-        socket.emit('updatePlayerCards', bottomDealer.cards);
-        
-        // 通知所有玩家抠底完成
-        io.to(roomId).emit('bottomDealCompleted', {
-            bottomDealer: socket.id
+
+        // 发送轮到谁出牌
+        const nextPlayer = gameState.players.find(p => p.id === gameState.currentPlayer);
+        io.to(roomId).emit('playerTurn', {
+            player: gameState.currentPlayer,
+            playerName: nextPlayer?.name,
+            isFirstPlayer: true, // 这是游戏的第一轮第一个出牌者
+            leadingPlay: null   // 还没有领出的牌
         });
+
+        // !! 使用正确的变量名 playerWhoDealtBottom !!
+        socket.emit('updatePlayerCards', playerWhoDealtBottom.cards); // <-- 修复：使用正确的变量名
+
+        // 如果需要，触发机器人出牌
+        if (nextPlayer && nextPlayer.isBot) {
+            handleBotPlay(nextPlayer, gameState, roomId, io, endRound);
+        }
     });
 
-    // 添加处理出牌的事件
+    // 修改 playCards 处理器
     socket.on('playCards', (data) => {
         console.log('收到出牌请求:', data);
         const gameState = games.get(data.roomId);
-        if (!gameState) {
-            console.log('找不到游戏状态:', data.roomId);
-            return;
-        }
-        
-        // 检查是否轮到该玩家出牌
-        if (gameState.currentPlayer !== socket.id) {
-            console.log('不是该玩家的回合:', socket.id, '当前玩家:', gameState.currentPlayer);
-            socket.emit('playError', { message: '还没轮到你出牌' });
-            return;
-        }
-        
-        // 获取当前玩家信息
+        const room = rooms.get(data.roomId); // 获取房间信息以获取名字等
+        // ... (验证: gameState, currentPlayer 是否匹配 socket.id, room) ...
+        if (!gameState || gameState.currentPlayer !== socket.id || !room) { /* ... 错误处理 ... */ return; }
+
         const currentPlayerIndex = gameState.players.findIndex(p => p.id === socket.id);
         const currentPlayer = gameState.players[currentPlayerIndex];
-        
-        if (!currentPlayer) {
-            console.log('找不到当前玩家');
-            socket.emit('playError', { message: '找不到玩家信息' });
-            return;
-        }
-        
+        if (!currentPlayer) { /* ... 错误处理 ... */ return; }
+
         const playedCards = data.cards;
-        
-        // 验证玩家是否有这些牌
-        const hasAllCards = playedCards.every(playedCard => 
-            currentPlayer.cards.some(card => 
-                card.suit === playedCard.suit && card.value === playedCard.value
-            )
-        );
-        
-        if (!hasAllCards) {
-            console.log('玩家手牌中没有包含所有出的牌');
-            socket.emit('playError', { message: '你的手牌中没有包含所有要出的牌' });
-            return;
+
+        // --- 服务器端验证 (基础 - 稍后需要更多) ---
+        // 1. 检查玩家是否有这些牌 (已部分完成)
+        // 2. 根据 leadingPlay 检查出牌是否合法 (如果不是第一个出牌者)
+        const isFirst = gameState.firstPlayerInRound === socket.id;
+        const leadingPlay = getLeadingPlay(gameState.roundCards);
+
+        if (!isFirst && leadingPlay) {
+            if (playedCards.length !== leadingPlay.cards.length) {
+                console.log(`出牌被拒绝：牌数错误。需要 ${leadingPlay.cards.length} 张, 实际 ${playedCards.length} 张`);
+                socket.emit('playError', { message: `出牌数量错误，需要出 ${leadingPlay.cards.length} 张` });
+                return; // 拒绝出牌
+            }
+            // TODO: 稍后添加更复杂的服务器端跟牌验证
+        } else if (isFirst) {
+            // TODO: 稍后添加服务器端领出验证 (是否是有效牌型?)
         }
-        
-        // 从玩家手牌中移除这些牌
-        currentPlayer.cards = currentPlayer.cards.filter(card => 
-            !playedCards.some(pc => pc.suit === card.suit && pc.value === card.value)
-        );
-        
-        // 更新游戏状态
+
+        // --- 更新游戏状态 ---
+        // 从手牌移除牌 (如果存在重复牌，确保唯一性)
+         let cardsToRemove = [...playedCards];
+         currentPlayer.cards = currentPlayer.cards.filter(cardInHand => {
+             const indexToRemove = cardsToRemove.findIndex(cardToRemove =>
+                 cardToRemove.suit === cardInHand.suit && cardToRemove.value === cardInHand.value
+             );
+             if (indexToRemove !== -1) {
+                 cardsToRemove.splice(indexToRemove, 1); // 从待移除列表中移除一个实例
+                 return false; // 从手牌中过滤掉这张牌
+             }
+             return true; // 保留这张手牌
+         });
+
+
+        // 将出的牌添加到 roundCards
         gameState.roundCards.push({
             player: socket.id,
             cards: playedCards
         });
-        
-        // 通知所有玩家有人出牌
+
+        // 通知客户端
         io.to(data.roomId).emit('cardPlayed', {
             player: socket.id,
             cards: playedCards,
             playerName: currentPlayer.name
         });
-        
-        // 通知当前玩家更新手牌
-        socket.emit('updatePlayerCards', currentPlayer.cards);
-        
-        // 确定下一个出牌玩家
+        socket.emit('updatePlayerCards', currentPlayer.cards); // 更新当前玩家的手牌
+
+        // --- 决定下一个玩家 ---
         const nextPlayerIndex = (currentPlayerIndex + 1) % gameState.players.length;
         const nextPlayer = gameState.players[nextPlayerIndex];
-        gameState.currentPlayer = nextPlayer.id;
-        
-        // 如果回到第一个玩家，设置为本轮第一个出牌的玩家
+
+        // 检查本轮是否结束
         if (nextPlayer.id === gameState.firstPlayerInRound) {
-            // 清空本轮出牌记录，开始新的一轮
-            gameState.roundCards = [];
+            // 本轮结束逻辑
+            console.log("本轮结束。正在确定赢家...");
+            // TODO: 实现 determineRoundWinner 函数，基于 gameState.roundCards
+            const winnerInfo = determineRoundWinner(gameState.roundCards, gameState.mainSuit, gameState.commonMain); // 占位符
+            console.log("本轮赢家:", winnerInfo);
+
+            gameState.currentPlayer = winnerInfo.winnerId; // 赢家开始下一轮
+            gameState.firstPlayerInRound = winnerInfo.winnerId; // 标记新的首个出牌者
+            gameState.roundCards = []; // 为下一轮清空牌
+
+            io.to(data.roomId).emit('roundEnd', { // 通知本轮结束
+                winner: winnerInfo.winnerId,
+                winnerName: gameState.players.find(p => p.id === winnerInfo.winnerId)?.name,
+                nextPlayer: winnerInfo.winnerId // 赢家领出下一轮
+            });
+
+            // 为赢家发送 playerTurn (开始新一轮)
+            io.to(data.roomId).emit('playerTurn', {
+                player: gameState.currentPlayer,
+                playerName: gameState.players.find(p => p.id === gameState.currentPlayer)?.name,
+                isFirstPlayer: true, // 赢家是新一轮的第一个出牌者
+                leadingPlay: null   // 没有领出的牌
+            });
+
+        } else {
+            // 本轮继续
+            gameState.currentPlayer = nextPlayer.id; // 设置下一个玩家
+            const currentLeadingPlay = getLeadingPlay(gameState.roundCards); // 获取实际的领出牌信息
+
+            io.to(data.roomId).emit('playerTurn', {
+                player: gameState.currentPlayer,
+                playerName: nextPlayer.name,
+                isFirstPlayer: false, // 不是第一个出牌者
+                leadingPlay: currentLeadingPlay // ** 发送领出牌信息 **
+            });
         }
-        
-        // 通知所有玩家轮到谁出牌
-        io.to(data.roomId).emit('playerTurn', {
-            player: gameState.currentPlayer,
-            playerName: nextPlayer.name,
-            isFirstPlayer: nextPlayer.id === gameState.firstPlayerInRound
-        });
-        
-        // 如果下一个玩家是机器人，让它自动出牌
-        if (nextPlayer.isBot) {
-            handleBotPlay(nextPlayer, gameState, data.roomId, io, endRound);
+
+        // 如果需要，为 *实际的* 下一个玩家触发机器人出牌
+        const actualNextPlayer = gameState.players.find(p => p.id === gameState.currentPlayer);
+        if (actualNextPlayer && actualNextPlayer.isBot) {
+            // 确保机器人如果需要，可以访问 leadingPlay
+            handleBotPlay(actualNextPlayer, gameState, data.roomId, io, endRound);
         }
     });
+
+    // 本轮赢家逻辑的占位符 - 非常重要，需要正确实现
+    function determineRoundWinner(roundCards, mainSuit, commonMain) {
+        // 需要根据领出花色、是否毙牌等来比较牌的大小
+        // 返回 { winnerId: string, winningCards: Card[] }
+        console.warn("determineRoundWinner 逻辑是占位符!");
+        if (!roundCards || roundCards.length === 0) return { winnerId: null, winningCards: [] };
+        // 过于简化的占位符：最后一个出牌者赢 (不正确)
+        const lastPlay = roundCards[roundCards.length - 1];
+         return { winnerId: lastPlay.player, winningCards: lastPlay.cards };
+
+        // TODO: 实现真实的比较逻辑，基于规则:
+        // 1. 找到领出花色/牌型。
+        // 2. 识别主牌（毙牌）。
+        // 3. 在胜出类别中比较大小（主牌 > 领出花色 > 垫牌）。
+        // 4. 处理相同大小（先出者为大）。
+    }
 });
 
 const PORT = process.env.PORT || 3001;

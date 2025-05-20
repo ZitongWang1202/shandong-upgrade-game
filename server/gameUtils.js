@@ -4,52 +4,95 @@
 function handleBotPlay(botPlayer, gameState, roomId, io, endRound) {
     // 延迟2秒出牌，模拟思考时间
     setTimeout(() => {
-        const isFirstPlayerInRound = gameState.firstPlayerInRound === botPlayer.id;
         let validPlay = null;
-        
-        // 机器人出牌策略
-        // 如果是首位出牌，出一张牌
-        if (isFirstPlayerInRound && botPlayer.cards.length > 0) {
-            validPlay = [botPlayer.cards[0]];
-        }
-        // 如果是跟牌，尝试出与第一位玩家相同数量的牌
-        else if (gameState.roundCards.length > 0) {
-            // 获取第一个出牌玩家的牌数量
-            const firstPlay = gameState.roundCards[0];
-            const cardsRequired = firstPlay.cards.length;
-            
-            console.log(`机器人需要出 ${cardsRequired} 张牌`);
-            
-            // 检查机器人是否有足够的牌
-            if (botPlayer.cards.length >= cardsRequired) {
-                // 从机器人手牌中选择指定数量的牌
-                validPlay = botPlayer.cards.slice(0, cardsRequired);
+        let playedPredefined = false; // 标记是否成功执行了预设出牌
+
+        // --- 为受控机器人添加的测试逻辑 开始 ---
+        if (gameState.testConfig && gameState.testConfig.controlledBotId === botPlayer.id) {
+            const isLeadingThisTrick = gameState.firstPlayerInRound === botPlayer.id && gameState.roundCards.length === 0;
+
+            if (isLeadingThisTrick && gameState.testConfig.currentLeadIndex < gameState.testConfig.predefinedLeads.length) {
+                const predefinedCardsToPlay = gameState.testConfig.predefinedLeads[gameState.testConfig.currentLeadIndex];
                 
-                console.log(`机器人选择了 ${validPlay.length} 张牌:`, validPlay);
-            } else {
-                console.log(`机器人牌不够，只有 ${botPlayer.cards.length} 张牌`);
-                // 如果牌不够，就出所有牌
-                validPlay = [...botPlayer.cards];
+                // 验证机器人手牌中是否有这些预设的牌
+                let botActuallyHasCards = true;
+                const botHandForValidation = [...botPlayer.cards]; // 创建手牌副本用于验证，以正确处理重复牌
+
+                for (const cardToPlay of predefinedCardsToPlay) {
+                    const cardInHandIndex = botHandForValidation.findIndex(
+                        handCard => handCard.suit === cardToPlay.suit && handCard.value === cardToPlay.value
+                    );
+                    if (cardInHandIndex !== -1) {
+                        botHandForValidation.splice(cardInHandIndex, 1); // 从副本中移除，以便正确校验同点数多张牌
+                    } else {
+                        botActuallyHasCards = false;
+                        break;
+                    }
+                }
+
+                if (botActuallyHasCards) {
+                    validPlay = predefinedCardsToPlay;
+                    gameState.testConfig.currentLeadIndex++;
+                    playedPredefined = true;
+                    console.log(`[受控机器人 ${botPlayer.id}] 打出预设牌组 #${gameState.testConfig.currentLeadIndex -1}:`, validPlay);
+                } else {
+                    console.error(`[受控机器人 ${botPlayer.id}] 错误: 手牌中没有预设的牌组 #${gameState.testConfig.currentLeadIndex}:`, predefinedCardsToPlay, "当前手牌:", botPlayer.cards);
+                    // playedPredefined 保持 false，将回退到标准AI
+                }
+            } else if (isLeadingThisTrick) {
+                // 是受控机器人且轮到它领出，但预设牌组已用完
+                console.log(`[受控机器人 ${botPlayer.id}] 预设牌组已用完，使用标准AI逻辑。`);
             }
+        }
+        // --- 为受控机器人添加的测试逻辑 结束 ---
+
+        if (!playedPredefined) { // 如果没有执行预设出牌，则使用标准AI逻辑
+            const isBotLeadingThisTrick = gameState.firstPlayerInRound === botPlayer.id && gameState.roundCards.length === 0;
+
+            if (isBotLeadingThisTrick) { // 机器人领出这一轮
+                if (botPlayer.cards.length > 0) {
+                    validPlay = [botPlayer.cards[0]]; // 简单AI：出第一张牌
+                    console.log(`[机器人AI ${botPlayer.id}] 领出:`, validPlay);
+                } else {
+                    console.log(`[机器人AI ${botPlayer.id}] 领出但没有手牌。`);
+                }
+            } else if (gameState.roundCards.length > 0) { // 机器人跟牌
+                const firstPlayInTrick = gameState.roundCards[0];
+                const cardsRequired = firstPlayInTrick.cards.length;
+                
+                console.log(`[机器人AI ${botPlayer.id}] 跟牌，需要 ${cardsRequired} 张牌`);
+                
+                if (botPlayer.cards.length >= cardsRequired) {
+                    validPlay = botPlayer.cards.slice(0, cardsRequired); // 简单AI：出前面N张牌
+                    console.log(`[机器人AI ${botPlayer.id}] 跟牌:`, validPlay);
+                } else if (botPlayer.cards.length > 0) { // 牌不够，但有牌可出
+                    validPlay = [...botPlayer.cards]; // 出掉所有手牌
+                    console.log(`[机器人AI ${botPlayer.id}] 跟牌时牌不够，出所有牌 (${validPlay.length}):`, validPlay);
+                } else {
+                    console.log(`[机器人AI ${botPlayer.id}] 跟牌但没有手牌。`);
+                }
+            }
+            // 如果 validPlay 仍然是 null (例如，在非领出也非跟牌的罕见情况下，或者机器人确实没牌了)，
+            // 后续逻辑会处理这种情况。
         }
         
         if (validPlay && validPlay.length > 0) {
-            // 从机器人手牌中移除这些牌
+            // 从机器人手牌中移除这些牌 (注意：原有的 filter 方法在处理手牌与出牌都有重复牌时可能不完美)
             botPlayer.cards = botPlayer.cards.filter(card => 
                 !validPlay.some(pc => pc.suit === card.suit && pc.value === card.value)
             );
             
-            // 根据牌数量确定牌型
+            // 根据牌数量确定牌型 (这是非常简化的牌型判断)
             let pattern = 'SINGLE';
             if (validPlay.length === 2) pattern = 'PAIR';
-            else if (validPlay.length === 4) pattern = 'CONSECUTIVE_PAIRS';
-            else if (validPlay.length >= 5) pattern = 'RAIN';
+            else if (validPlay.length === 4) pattern = 'CONSECUTIVE_PAIRS'; // 假设是连对
+            else if (validPlay.length >= 5) pattern = 'RAIN'; // 假设是甩牌/雨
             
             // 更新游戏状态
             gameState.roundCards.push({
                 player: botPlayer.id,
                 cards: validPlay,
-                pattern: pattern
+                pattern: pattern // 使用简化的牌型
             });
             
             // 通知所有玩家有人出牌
@@ -61,11 +104,11 @@ function handleBotPlay(botPlayer, gameState, roomId, io, endRound) {
             });
             
             // 判断这一轮是否结束
-            const allPlayersPlayed = gameState.roundCards.length === gameState.players.length;
+            const allPlayersPlayedThisTrick = gameState.roundCards.length === gameState.players.length;
             
-            if (allPlayersPlayed) {
+            if (allPlayersPlayedThisTrick) {
                 // 轮次结束，确定赢家并开始新一轮
-                endRound(gameState, roomId, io, handleBotPlay);
+                endRound(gameState, roomId, io, handleBotPlay); // 将 handleBotPlay 自身传递下去，以便机器人开始下一轮
             } else {
                 // 确定下一个出牌玩家
                 const currentPlayerIndex = gameState.players.findIndex(p => p.id === botPlayer.id);
@@ -77,7 +120,7 @@ function handleBotPlay(botPlayer, gameState, roomId, io, endRound) {
                 io.to(roomId).emit('playerTurn', {
                     player: gameState.currentPlayer,
                     playerName: nextPlayer.name,
-                    isFirstPlayer: gameState.currentPlayer === gameState.firstPlayerInRound
+                    isFirstPlayer: gameState.currentPlayer === gameState.firstPlayerInRound // 下一个玩家是否为新一轮的首出
                 });
                 
                 // 如果下一个玩家是机器人，让它自动出牌
@@ -86,28 +129,28 @@ function handleBotPlay(botPlayer, gameState, roomId, io, endRound) {
                 }
             }
         } else {
-            // 机器人没有合适的牌可以出
-            console.log('机器人没有合适的牌可以出');
+            // 机器人没有合适的牌可以出，或者没有手牌了
+            console.log(`[机器人 ${botPlayer.id}] 没有可出的牌或决策为不出。`);
             
-            // 进入下一个玩家
+            // 逻辑上，如果机器人不能出牌（例如，在严格的跟牌规则下，没有合法的牌），
+            // 游戏规则可能会定义为"过"或强制垫牌。
+            // 当前简化逻辑：轮到下一个玩家 (这可能需要根据实际游戏规则调整)
             const currentPlayerIndex = gameState.players.findIndex(p => p.id === botPlayer.id);
             const nextPlayerIndex = (currentPlayerIndex + 1) % gameState.players.length;
             const nextPlayer = gameState.players[nextPlayerIndex];
             gameState.currentPlayer = nextPlayer.id;
             
-            // 通知所有玩家轮到谁出牌
             io.to(roomId).emit('playerTurn', {
                 player: gameState.currentPlayer,
                 playerName: nextPlayer.name,
                 isFirstPlayer: gameState.currentPlayer === gameState.firstPlayerInRound
             });
             
-            // 如果下一个玩家是机器人，让它自动出牌
             if (nextPlayer.isBot) {
                 handleBotPlay(nextPlayer, gameState, roomId, io, endRound);
             }
         }
-    }, 2000);
+    }, 2000); // 保持2秒延迟
 }
 
 // 轮次结束，确定赢家并开始新一轮

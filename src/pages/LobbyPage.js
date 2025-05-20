@@ -101,6 +101,12 @@ const LobbyPage = () => {
     socket.emit('createPlayingTest');
   };
 
+  // 创建跟随测试游戏
+  const createFollowTestGame = () => {
+    console.log('Creating follow test game');
+    socket.emit('createFollowTestGame');
+  };
+
   return (
     <Container maxW="container.xl" py={8}>
       <VStack spacing={8} align="stretch">
@@ -145,6 +151,12 @@ const LobbyPage = () => {
               <Button
                 colorScheme="pink" onClick={createPlayingTestGame}>
                 出牌测试
+              </Button>
+            </Tooltip>
+            <Tooltip label="跟牌测试：机器人叫主" hasArrow>
+              <Button
+                colorScheme="purple" onClick={createFollowTestGame}>
+                跟牌测试
               </Button>
             </Tooltip>
           </HStack>
